@@ -15,8 +15,7 @@
 
 #include "dnsproxy.h"        // DNSProxyInit/ProxyUDPCallback/ProxyTCPCallback
 #include "mDNSMacOSX.h"      // KQueueLock/KQueueUnlock
-#include <xpc/xpc.h>
-#include <xpc/private.h>     // xpc_connection_copy_entitlement_value 
+#include <xpc/private.h>     // xpc_connection_copy_entitlement_value
 
 // ***************************************************************************
 // Globals
@@ -42,11 +41,11 @@ mDNSlocal void ActivateDNSProxy(mDNSu32 IpIfArr[MaxIp], mDNSu32 OpIf, mDNSBool p
     LogInfo("ActivateDNSProxy: InterfaceIndex List by Client: Input[%d, %d, %d, %d, %d] Output[%d] ", IpIfArr[0], IpIfArr[1],
              IpIfArr[2], IpIfArr[3], IpIfArr[4], OpIf);
  
-    KQueueLock(&mDNSStorage); 
-    DNSProxyInit(&mDNSStorage, IpIfArr, OpIf);
+    KQueueLock();
+    DNSProxyInit(IpIfArr, OpIf);
     if (proxy_off) // Open skts only if proxy was OFF else we may end up opening extra skts
-        mDNSPlatformInitDNSProxySkts(&mDNSStorage, ProxyUDPCallback, ProxyTCPCallback);
-    KQueueUnlock(&mDNSStorage, "DNSProxy Activated");
+        mDNSPlatformInitDNSProxySkts(ProxyUDPCallback, ProxyTCPCallback);
+    KQueueUnlock("DNSProxy Activated");
 }
 
 mDNSlocal void handle_dps_terminate()
@@ -56,11 +55,11 @@ mDNSlocal void handle_dps_terminate()
     // Clear the Client's PID, so that we can now accept new DPS requests
     dps_client_pid = 0;
 
-    KQueueLock(&mDNSStorage);
+    KQueueLock();
     mDNSPlatformCloseDNSProxySkts(&mDNSStorage);
     // TBD: Close TCP Sockets
-    DNSProxyTerminate(&mDNSStorage);
-    KQueueUnlock(&mDNSStorage, "DNSProxy Deactivated");
+    DNSProxyTerminate();
+    KQueueUnlock("DNSProxy Deactivated");
 }
 
 mDNSlocal void handle_dps_request(xpc_object_t req)
@@ -87,10 +86,10 @@ mDNSlocal void handle_dps_request(xpc_object_t req)
         {
             LogMsg("handle_dps_request: A Client is already using DNS Proxy and your request cannot be handled at this time");
             // Return Engaged Status to the client
-            xpc_object_t reply = xpc_dictionary_create(NULL, NULL, 0); 
+            xpc_object_t reply = xpc_dictionary_create_reply(req); 
             if (reply)
             {   
-                xpc_dictionary_set_uint64(reply, kDNSDaemonReply, kDNSMsg_BadArg);
+                xpc_dictionary_set_uint64(reply, kDNSDaemonReply, kDNSMsg_Busy);
                 xpc_connection_send_message(remote_conn, reply);
                 xpc_release(reply);  
             }   
@@ -138,7 +137,7 @@ mDNSlocal void handle_dps_request(xpc_object_t req)
 }
 
 // Verify Client's Entitlement
-mDNSlocal mDNSBool IsEntitled(xpc_connection_t conn, const char *password)
+mDNSexport mDNSBool IsEntitled(xpc_connection_t conn, const char *password)
 {
     mDNSBool entitled = mDNSfalse;
     xpc_object_t ent = xpc_connection_copy_entitlement_value(conn, password);
@@ -157,7 +156,7 @@ mDNSlocal mDNSBool IsEntitled(xpc_connection_t conn, const char *password)
     }
     
     if (!entitled)
-        LogMsg("IsEntitled: DNSProxyService Client is missing Entitlement!");
+        LogMsg("IsEntitled: Client is missing Entitlement!");
     
     return entitled;
 }
@@ -241,7 +240,9 @@ mDNSexport void xpc_server_init()
 {
     // Add XPC Services here
     init_dnsproxy_service();
+    init_dnsctl_service();
 }
+
 
 #else // !UNICAST_DISABLED
 

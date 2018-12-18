@@ -203,7 +203,9 @@ gotError:
     }
 done:
     if (sockfd != -1) {
-        assert(close(sockfd) == 0);
+        int rv;
+        rv = close(sockfd);
+        assert(rv == 0);
     }
     if (fp != NULL) {
         fclose(fp);
@@ -220,7 +222,8 @@ done:
  * Unlike plen_to_mask returns netmask in binary form and not
  * in text form.
  */
-static void plen_to_netmask(int prefix, unsigned char *addr) {
+static void plen_to_netmask(int prefix, unsigned char *addr)
+{
     for (; prefix > 8; prefix -= 8)
         *addr++ = 0xff;
     for (; prefix > 0; prefix--)
@@ -836,7 +839,7 @@ recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
 
     *ttl = 255;         // If kernel fails to provide TTL data then assume the TTL was 255 as it should be
 
-    msg.msg_control = (void *) control_un.control;
+    msg.msg_control = control_un.control;
     msg.msg_controllen = sizeof(control_un.control);
     msg.msg_flags = 0;
 #else

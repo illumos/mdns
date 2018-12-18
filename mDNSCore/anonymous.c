@@ -71,7 +71,7 @@ mDNSlocal mDNSBool InitializeNSEC3Record(ResourceRecord *rr, const mDNSu8 *AnonD
     // Hash the base service name + salt + AnonData
     if (!NSEC3HashName(rr->name, nsec3, AnonData, len, hashName, &hlen))
     {
-        LogMsg("InitializeNSEC3Record: NSEC3HashName failed for ##s", rr->name->c);
+        LogMsg("InitializeNSEC3Record: NSEC3HashName failed for %##s", rr->name->c);
         return mDNSfalse;
     }
     if (hlen != SHA1_HASH_LENGTH)
@@ -240,6 +240,12 @@ mDNSexport void SetAnonData(DNSQuestion *q, ResourceRecord *rr, mDNSBool ForQues
     debugf("SetAnonData: question %##s(%p), rr %##s(%p)", q->qname.c, q->AnonInfo, rr->name->c, rr->AnonInfo);
     if (ForQuestion)
     {
+        if (q->AnonInfo->AnonDataLen < rr->AnonInfo->AnonDataLen)
+        {
+            mDNSPlatformMemFree(q->AnonInfo->AnonData);
+            q->AnonInfo->AnonData = mDNSNULL;
+        }
+
         if (!q->AnonInfo->AnonData)
         {
             q->AnonInfo->AnonData = mDNSPlatformMemAllocate(rr->AnonInfo->AnonDataLen);
@@ -251,6 +257,12 @@ mDNSexport void SetAnonData(DNSQuestion *q, ResourceRecord *rr, mDNSBool ForQues
     }
     else
     {
+        if (rr->AnonInfo->AnonDataLen < q->AnonInfo->AnonDataLen)
+        {
+            mDNSPlatformMemFree(rr->AnonInfo->AnonData);
+            rr->AnonInfo->AnonData = mDNSNULL;
+        }
+
         if (!rr->AnonInfo->AnonData)
         {
             rr->AnonInfo->AnonData = mDNSPlatformMemAllocate(q->AnonInfo->AnonDataLen);
@@ -275,9 +287,10 @@ mDNSexport int AnonInfoAnswersQuestion(const ResourceRecord *const rr, const DNS
     int AnonDataLen;
     rdataNSEC3 *nsec3;
     int hlen;
-    const mDNSu8 hashName[NSEC3_MAX_HASH_LEN];
     int nxtLength;
     mDNSu8 *nxtName;
+    mDNSu8 hashName[NSEC3_MAX_HASH_LEN];
+    mDNSPlatformMemZero(hashName, sizeof(hashName));
 
     debugf("AnonInfoAnswersQuestion: question qname %##s", q->qname.c);
 
@@ -398,7 +411,7 @@ mDNSexport int AnonInfoAnswersQuestion(const ResourceRecord *const rr, const DNS
 
     if (!NSEC3HashName(nsec3RR->name, nsec3, AnonData, AnonDataLen, hashName, &hlen))
     {
-        LogMsg("AnonInfoAnswersQuestion: NSEC3HashName failed for ##s", nsec3RR->name->c);
+        LogMsg("AnonInfoAnswersQuestion: NSEC3HashName failed for %##s", nsec3RR->name->c);
         return mDNSfalse;
     }
     if (hlen != SHA1_HASH_LENGTH)

@@ -31,6 +31,7 @@ extern "C" {
 #include "mDNSEmbeddedAPI.h"  // for domain name structure
 
 #include <net/if.h>
+#include <os/log.h>
 
 //#define MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
 #ifdef MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
@@ -41,17 +42,13 @@ extern "C" {
 #if TARGET_OS_EMBEDDED
 #define NO_SECURITYFRAMEWORK 1
 #define NO_CFUSERNOTIFICATION 1
-#include <MobileGestalt.h> // for IsAppleTV() 
-#include <SystemConfiguration/scprefs_observer.h> // for _scprefs_observer_watch()
-extern mDNSBool GetmDNSManagedPref(CFStringRef key);
+#include <MobileGestalt.h> // for IsAppleTV()
 #endif
 
 #ifndef NO_SECURITYFRAMEWORK
 #include <Security/SecureTransport.h>
 #include <Security/Security.h>
 #endif /* NO_SECURITYFRAMEWORK */
-
-#define kmDNSResponderServName "com.apple.mDNSResponder"
 
 enum mDNSDynamicStoreSetConfigKey
 {
@@ -65,7 +62,7 @@ enum mDNSDynamicStoreSetConfigKey
 
 typedef struct NetworkInterfaceInfoOSX_struct NetworkInterfaceInfoOSX;
 
-typedef void (*KQueueEventCallback)(int fd, short filter, void *context);
+typedef void (*KQueueEventCallback)(int fd, short filter, void *context, mDNSBool encounteredEOF);
 typedef struct
 {
     KQueueEventCallback KQcallback;
@@ -89,6 +86,8 @@ typedef struct
     KQueueEntry kqsv6;
     int                     *closeFlag;
     mDNSBool proxy;
+    mDNSBool sktv4EOF;
+    mDNSBool sktv6EOF;
 } KQSocketSet;
 
 struct UDPSocket_struct
@@ -126,6 +125,9 @@ struct TCPSocket_struct
     mStatus err;
 };
 
+// Value assiged to 'Exists' to indicate the multicast state of the interface has changed.
+#define MulticastStateChanged   2
+
 struct NetworkInterfaceInfoOSX_struct
 {
     NetworkInterfaceInfo ifinfo;                // MUST be the first element in this structure
@@ -150,6 +152,7 @@ struct NetworkInterfaceInfoOSX_struct
     int BPF_fd;                                 // -1 uninitialized; -2 requested BPF; -3 failed
     int BPF_mcfd;                               // Socket for our IPv6 ND group membership
     u_int BPF_len;
+    mDNSBool isExpensive;                       // True if this interface has the IFEF_EXPENSIVE flag set.
 #ifdef MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
     dispatch_source_t BPF_source;
 #else
@@ -177,7 +180,6 @@ struct mDNS_PlatformSupport_struct
     mDNSs32 HostNameConflict;                   // Time we experienced conflict on our link-local host name
     mDNSs32 KeyChainTimer;
 
-    CFRunLoopRef CFRunLoop;
     SCDynamicStoreRef Store;
     CFRunLoopSourceRef StoreRLS;
     CFRunLoopSourceRef PMRLS;
@@ -220,11 +222,11 @@ extern int KQueueFD;
 
 extern void NotifyOfElusiveBug(const char *title, const char *msg); // Both strings are UTF-8 text
 extern void SetDomainSecrets(mDNS *m);
-extern void mDNSMacOSXNetworkChanged(mDNS *const m);
+extern void mDNSMacOSXNetworkChanged(void);
 extern void mDNSMacOSXSystemBuildNumber(char *HINFO_SWstring);
-extern NetworkInterfaceInfoOSX *IfindexToInterfaceInfoOSX(const mDNS *const m, mDNSInterfaceID ifindex);
+extern NetworkInterfaceInfoOSX *IfindexToInterfaceInfoOSX(mDNSInterfaceID ifindex);
 extern void mDNSUpdatePacketFilter(const ResourceRecord *const excludeRecord);
-extern void myKQSocketCallBack(int s1, short filter, void *context);
+extern void myKQSocketCallBack(int s1, short filter, void *context, mDNSBool encounteredEOF);
 extern void mDNSDynamicStoreSetConfig(int key, const char *subkey, CFPropertyListRef value);
 extern void UpdateDebugState(void);
 
@@ -237,15 +239,14 @@ extern int KQueueSet(int fd, u_short flags, short filter, const KQueueEntry *con
 
 // When events are processed on the non-kqueue thread (i.e. CFRunLoop notifications like Sleep/Wake,
 // Interface changes, Keychain changes, etc.) they must use KQueueLock/KQueueUnlock to lock out the kqueue thread
-extern void KQueueLock(mDNS *const m);
-extern void KQueueUnlock(mDNS *const m, const char* task);
+extern void KQueueLock(void);
+extern void KQueueUnlock(const char* task);
 extern void mDNSPlatformCloseFD(KQueueEntry *kq, int fd);
 extern ssize_t myrecvfrom(const int s, void *const buffer, const size_t max,
                              struct sockaddr *const from, size_t *const fromlen, mDNSAddr *dstaddr, char *ifname, mDNSu8 *ttl);
 
 extern mDNSBool DictionaryIsEnabled(CFDictionaryRef dict);
 
-extern void CUPInit(mDNS *const m);
 extern const char *DNSScopeToString(mDNSu32 scope);
 
 // If any event takes more than WatchDogReportingThreshold milliseconds to be processed, we log a warning message
@@ -271,13 +272,13 @@ struct CompileTimeAssertionChecks_mDNSMacOSX
     // Check our structures are reasonable sizes. Including overly-large buffers, or embedding
     // other overly-large structures instead of having a pointer to them, can inadvertently
     // cause structure sizes (and therefore memory usage) to balloon unreasonably.
-
-    // Checks commented out when sizeof(DNSQuestion) change cascaded into having to change yet another
-    // set of hardcoded size values because these structures contain one or more DNSQuestion
-    // instances.
-//    char sizecheck_NetworkInterfaceInfoOSX[(sizeof(NetworkInterfaceInfoOSX) <=  7084) ? 1 : -1];
+    char sizecheck_NetworkInterfaceInfoOSX[(sizeof(NetworkInterfaceInfoOSX) <=  7464) ? 1 : -1];
     char sizecheck_mDNS_PlatformSupport   [(sizeof(mDNS_PlatformSupport)    <=  1378) ? 1 : -1];
 };
+
+extern mDNSInterfaceID AWDLInterfaceID;
+void initializeD2DPlugins(mDNS *const m);
+void terminateD2DPlugins(void);
 
 #ifdef  __cplusplus
 }

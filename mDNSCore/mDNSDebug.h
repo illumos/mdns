@@ -87,9 +87,9 @@ extern "C" {
     #define MDNS_GNU_VA_ARGS            0
     #define MDNS_HAS_VA_ARG_MACROS      1
 #else
-    #define MDNS_C99_VA_ARGS            1
+    #define MDNS_C99_VA_ARGS            0
     #define MDNS_GNU_VA_ARGS            0
-    #define MDNS_HAS_VA_ARG_MACROS      1
+    #define MDNS_HAS_VA_ARG_MACROS      0
 #endif
 
 #if (MDNS_HAS_VA_ARG_MACROS)

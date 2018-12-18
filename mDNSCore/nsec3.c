@@ -238,7 +238,7 @@ mDNSlocal mDNSBool NSEC3Find(mDNS *const m, NSEC3FindValues val, CacheRecord *nc
         name = SkipLeadingLabels(origName, i);
         if (!NSEC3HashName(name, nsec3, mDNSNULL, 0, hashName, &hlen))
         {
-            LogMsg("NSEC3Find: NSEC3HashName failed for ##s", name->c);
+            LogMsg("NSEC3Find: NSEC3HashName failed for %##s", name->c);
             continue;
         }
 
@@ -675,12 +675,11 @@ mDNSexport CacheRecord *NSEC3RecordIsDelegation(mDNS *const m, domainname *name,
     CacheGroup *cg;
     CacheRecord *cr;
     CacheRecord *ncr;
-    mDNSu32 slot, namehash;
+    mDNSu32 namehash;
 
-    slot = HashSlot(name);
     namehash = DomainNameHashValue(name);
 
-    cg = CacheGroupForName(m, (const mDNSu32)slot, namehash, name);
+    cg = CacheGroupForName(m, namehash, name);
     if (!cg)
     {
         LogDNSSEC("NSEC3RecordForName: cg NULL for %##s", name);
@@ -708,7 +707,7 @@ mDNSexport CacheRecord *NSEC3RecordIsDelegation(mDNS *const m, domainname *name,
 
             if (!NSEC3HashName(name, nsec3, mDNSNULL, 0, hashName, &hlen))
             {
-                LogMsg("NSEC3RecordIsDelegation: NSEC3HashName failed for ##s", name->c);
+                LogMsg("NSEC3RecordIsDelegation: NSEC3HashName failed for %##s", name->c);
                 return mDNSNULL;
             }
 

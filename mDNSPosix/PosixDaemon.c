@@ -132,11 +132,11 @@ mDNSlocal void ToggleLogPacket(void)
     mDNS_PacketLoggingEnabled = !mDNS_PacketLoggingEnabled;
 }
 
-mDNSlocal void DumpStateLog(mDNS *const m)
+mDNSlocal void DumpStateLog()
 // Dump a little log of what we've been up to.
 {
-    LogMsg("---- BEGIN STATE LOG ----");
-    udsserver_info(m);
+	LogMsg("---- BEGIN STATE LOG ----");
+    udsserver_info();
     LogMsg("----  END STATE LOG  ----");
 }
 
@@ -176,7 +176,7 @@ mDNSlocal mStatus MainLoop(mDNS *m) // Loop until we quit.
         (void) mDNSPosixRunEventLoopOnce(m, &timeout, &signals, &gotData);
 
         if (sigismember(&signals, SIGHUP )) Reconfigure(m);
-        if (sigismember(&signals, SIGINFO)) DumpStateLog(m);
+        if (sigismember(&signals, SIGINFO)) DumpStateLog();
         if (sigismember(&signals, SIGUSR1)) ToggleLog();
         if (sigismember(&signals, SIGUSR2)) ToggleLogPacket();
         // SIGPIPE happens when we try to write to a dead client; death should be detected soon in request_callback() and cleaned up.
@@ -260,9 +260,8 @@ mStatus udsSupportRemoveFDFromEventLoop(int fd, void *platform_data)        // N
     return err;
 }
 
-mDNSexport void RecordUpdatedNiceLabel(mDNS *const m, mDNSs32 delay)
+mDNSexport void RecordUpdatedNiceLabel(mDNSs32 delay)
 {
-    (void)m;
     (void)delay;
     // No-op, for now
 }
