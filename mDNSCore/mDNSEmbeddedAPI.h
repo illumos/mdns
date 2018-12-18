@@ -276,6 +276,8 @@ typedef struct mDNSInterfaceID_dummystruct { void *dummy; } *mDNSInterfaceID;
 // find you get code that doesn't work consistently on big-endian and little-endian machines.
 #if defined(_WIN32)
  #pragma pack(push,2)
+#elif !defined(__GNUC__)
+ #pragma pack(1)
 #endif
 typedef       union { mDNSu8 b[ 2]; mDNSu16 NotAnInteger; } mDNSOpaque16;
 typedef       union { mDNSu8 b[ 4]; mDNSu32 NotAnInteger; } mDNSOpaque32;
@@ -284,6 +286,8 @@ typedef       union { mDNSu8 b[ 8]; mDNSu16 w[4]; mDNSu32 l[2]; } mDNSOpaque64;
 typedef       union { mDNSu8 b[16]; mDNSu16 w[8]; mDNSu32 l[4]; } mDNSOpaque128;
 #if defined(_WIN32)
  #pragma pack(pop)
+#elif !defined(__GNUC__)
+ #pragma pack()
 #endif
 
 typedef mDNSOpaque16 mDNSIPPort;        // An IP port is a two-byte opaque identifier (not an integer)
@@ -2158,7 +2162,7 @@ struct NetworkInterfaceInfo_struct
     mDNSBool DirectLink;                // a direct link, indicating we can skip the probe for
                                         // address records
     mDNSBool SupportsUnicastMDNSResponse;  // Indicates that the interface supports unicast responses
-                                        // to Bonjour queries.  Generally true for an interface.  
+                                        // to Bonjour queries.  Generally true for an interface.
 };
 
 #define SLE_DELETE                      0x00000001
@@ -2565,6 +2569,8 @@ extern mDNSu8 NumUnreachableDNSServers;
 #if (defined(_MSC_VER))
     #define mDNSinline static __inline
 #elif ((__GNUC__ > 2) || ((__GNUC__ == 2) && (__GNUC_MINOR__ >= 9)))
+    #define mDNSinline static inline
+#else
     #define mDNSinline static inline
 #endif
 
@@ -3362,7 +3368,7 @@ extern void mDNSPlatformGetDNSRoutePolicy(mDNS *const m, DNSQuestion *q, mDNSBoo
 extern void mDNSPlatformSetuDNSSocktOpt(UDPSocket *src, const mDNSAddr *dst, DNSQuestion *q);
 extern mDNSs32 mDNSPlatformGetPID(void);
 extern mDNSBool mDNSValidKeepAliveRecord(AuthRecord *rr);
-    
+
 // ***************************************************************************
 #if 0
 #pragma mark -

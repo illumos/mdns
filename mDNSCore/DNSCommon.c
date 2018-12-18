@@ -1536,8 +1536,8 @@ mDNSexport mDNSu32 RDataHashValue(const ResourceRecord *const rr)
         sum = DomainNameHashValue((domainname *)rdb->data);
         ptr += dlen;
         len -= dlen;
-        /* FALLTHROUGH */
     }
+    /* FALLTHROUGH */
 
     default:
     {
@@ -3808,8 +3808,13 @@ mDNSexport mStatus mDNSSendDNSMessage(mDNS *const m, DNSMessage *const msg, mDNS
     SwapDNSHeaderBytes(msg);
 
     // Dump the packet with the HINFO and TSIG
-    if (mDNS_PacketLoggingEnabled && !mDNSOpaque16IsZero(msg->h.id))
-        DumpPacket(m, status, mDNStrue, sock && (sock->flags & kTCPSocketFlags_UseTLS) ? "TLS" : sock ? "TCP" : "UDP", mDNSNULL, src ? src->port : MulticastDNSPort, dst, dstport, msg, end);
+    if (mDNS_PacketLoggingEnabled && !mDNSOpaque16IsZero(msg->h.id)) {
+	mDNSIPPort port = MulticastDNSPort;
+        DumpPacket(m, status, mDNStrue,
+	    sock && (sock->flags & kTCPSocketFlags_UseTLS) ?
+	    "TLS" : sock ? "TCP" : "UDP", mDNSNULL,
+	    src ? src->port : port, dst, dstport, msg, end);
+    }
 
     // put the number of additionals back the way it was
     msg->h.numAdditionals = numAdditionals;
@@ -4180,6 +4185,7 @@ decimal:    if (!F.havePrecision)
 
             case 'p':  F.havePrecision = F.lSize = 1;
                 F.precision = sizeof(void*) * 2;                // 8 characters on 32-bit; 16 characters on 64-bit
+		/* FALLTHROUGH */
             case 'X':  digits = "0123456789ABCDEF";
                 goto hexadecimal;
             case 'x':  digits = "0123456789abcdef";
@@ -4273,6 +4279,7 @@ hexadecimal: if (F.lSize) n = va_arg(arg, unsigned long);
 
             default:    s = mDNS_VACB;
                 i = mDNS_snprintf(mDNS_VACB, sizeof(mDNS_VACB), "<<UNKNOWN FORMAT CONVERSION CODE %%%c>>", c);
+		/* FALLTHROUGH */
 
             case '%':  *sbuffer++ = (char)c;
                 if (++nwritten >= buflen) goto exit;

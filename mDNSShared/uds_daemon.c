@@ -1144,11 +1144,13 @@ mDNSlocal void regrecord_callback(mDNS *const m, AuthRecord *rr, mStatus result)
 // This accounts for 2 places (connect_callback, request_callback)
 mDNSlocal void set_peer_pid(request_state *request)
 {
+#ifdef LOCAL_PEERPID
     pid_t           p    = (pid_t) -1;
     socklen_t       len  = sizeof(p);
+
     request->pid_name[0] = '\0';
     request->process_id  = -1;
-#ifdef LOCAL_PEERPID  
+
     if (request->sd < 0)  
         return;
     // to extract the pid value
@@ -1161,7 +1163,9 @@ mDNSlocal void set_peer_pid(request_state *request)
     request->process_id = p;
     debugf("set_peer_pid: Client PEERPID is %d %s", p, request->pid_name);
 #else   // !LOCAL_PEERPID
-    len = 0;
+    request->pid_name[0] = '\0';
+    request->process_id  = -1;
+
     LogInfo("set_peer_pid: Not Supported on this version of OS");
     if (request->sd < 0)
         return;
@@ -2179,7 +2183,7 @@ mDNSlocal mStatus handle_regservice_request(request_state *request)
     }
 
     return(err);
-    
+
 bad_param:
     freeL("handle_regservice_request (txtdata)", request->u.servicereg.txtdata);
     request->u.servicereg.txtdata = NULL;
@@ -3712,7 +3716,7 @@ mDNSlocal void SetQuestionPolicy(DNSQuestion *q, request_state *req)
     {
         q->pid = req->process_id;
     }
-    
+
     //debugf("SetQuestionPolicy: q->euid[%d] q->pid[%d] uuid is valid : %s", q->euid, q->pid, req->validUUID ? "true" : "false");
 }
 
@@ -3732,7 +3736,7 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
     if (interfaceIndex && !InterfaceID)
     {
         // If it's one of the specially defined inteface index values, just return an error.
-        // Also, caller should return an error immediately if lo0 (index 1) is not configured 
+        // Also, caller should return an error immediately if lo0 (index 1) is not configured
         // into the current active interfaces.  See background in Radar 21967160.
         if (PreDefinedInterfaceIndex(interfaceIndex) || interfaceIndex == 1)
         {
@@ -3829,9 +3833,9 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
     err = mDNS_StartQuery(&mDNSStorage, q);
    
     if (err)
-    { 
+    {
         LogMsg("%3d: ERROR: DNSServiceQueryRecord %##s %s mDNS_StartQuery: %d", request->sd, q->qname.c, DNSTypeName(q->qtype), (int)err);
-    }    
+    }
     else
     {
         request->terminate = queryrecord_termination_callback;
@@ -5063,9 +5067,9 @@ mDNSlocal void connect_callback(int fd, short filter, void *info)
 #if APPLE_OSX_mDNSResponder
         struct xucred x;
         socklen_t xucredlen = sizeof(x);
-        if (getsockopt(sd, 0, LOCAL_PEERCRED, &x, &xucredlen) >= 0 && x.cr_version == XUCRED_VERSION) 
+        if (getsockopt(sd, 0, LOCAL_PEERCRED, &x, &xucredlen) >= 0 && x.cr_version == XUCRED_VERSION)
             request->uid = x.cr_uid; // save the effective userid of the client
-        else 
+        else
             my_perror("ERROR: getsockopt, LOCAL_PEERCRED");
 
         debugf("LOCAL_PEERCRED %d %u %u %d", xucredlen, x.cr_version, x.cr_uid, x.cr_ngroups);
@@ -5131,7 +5135,7 @@ mDNSexport int udsserver_init(dnssd_sock_t skts[], mDNSu32 count)
         FILE *fp = fopen(PID_FILE, "w");
         if (fp != NULL)
         {
-            fprintf(fp, "%d\n", getpid());
+            fprintf(fp, "%d\n", (int)getpid());
             fclose(fp);
         }
     }
