@@ -28,6 +28,7 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <fcntl.h>
 
 #include "dnssd_ipc.h"
 
@@ -267,10 +268,10 @@ static int read_all(dnssd_sock_t sd, char *buf, int len)
         ssize_t num_read = recv(sd, buf, len, 0);
         // It is valid to get an interrupted system call error e.g., somebody attaching
         // in a debugger, retry without failing
-        if ((num_read < 0) && (errno == EINTR)) 
-        { 
-            syslog(LOG_INFO, "dnssd_clientstub read_all: EINTR continue"); 
-            continue; 
+        if ((num_read < 0) && (errno == EINTR))
+        {
+            syslog(LOG_INFO, "dnssd_clientstub read_all: EINTR continue");
+            continue;
         }
         if ((num_read == 0) || (num_read < 0) || (num_read > len))
         {
@@ -339,15 +340,15 @@ static int more_bytes(dnssd_sock_t sd)
         int nfdbits = sizeof (int) * 8;
         int nints = (sd/nfdbits) + 1;
         fs = (fd_set *)calloc(nints, (size_t)sizeof(int));
-        if (fs == NULL) 
-        { 
-            syslog(LOG_WARNING, "dnssd_clientstub more_bytes: malloc failed"); 
-            return 0; 
+        if (fs == NULL)
+        {
+            syslog(LOG_WARNING, "dnssd_clientstub more_bytes: malloc failed");
+            return 0;
         }
     }
     FD_SET(sd, fs);
     ret = select((int)sd+1, fs, (fd_set*)NULL, (fd_set*)NULL, &tv);
-    if (fs != &readfds) 
+    if (fs != &readfds)
         free(fs);
 #endif
     return (ret > 0);
@@ -356,8 +357,8 @@ static int more_bytes(dnssd_sock_t sd)
 // set_waitlimit() implements a timeout using select. It is called from deliver_request() before recv() OR accept()
 // to ensure the UDS clients are not blocked in these system calls indefinitely.
 // Note: Ideally one should never be blocked here, because it indicates either mDNSResponder daemon is not yet up/hung/
-// superbusy/crashed or some other OS bug. For eg: On Windows which suffers from 3rd party software 
-// (primarily 3rd party firewall software) interfering with proper functioning of the TCP protocol stack it is possible 
+// superbusy/crashed or some other OS bug. For eg: On Windows which suffers from 3rd party software
+// (primarily 3rd party firewall software) interfering with proper functioning of the TCP protocol stack it is possible
 // the next operation on this socket(recv/accept) is blocked since we depend on TCP to communicate with the system service.
 static int set_waitlimit(dnssd_sock_t sock, int timeout)
 {
@@ -507,10 +508,10 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
     dnssd_sockaddr_t saddr;
     DNSServiceOp *sdr;
 
-    if (!ref) 
-    { 
-        syslog(LOG_WARNING, "dnssd_clientstub DNSService operation with NULL DNSServiceRef"); 
-        return kDNSServiceErr_BadParam; 
+    if (!ref)
+    {
+        syslog(LOG_WARNING, "dnssd_clientstub DNSService operation with NULL DNSServiceRef");
+        return kDNSServiceErr_BadParam;
     }
 
     if (flags & kDNSServiceFlagsShareConnection)
@@ -542,11 +543,11 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
     #endif
 
     sdr = malloc(sizeof(DNSServiceOp));
-    if (!sdr) 
-    { 
-        syslog(LOG_WARNING, "dnssd_clientstub ConnectToServer: malloc failed"); 
-        *ref = NULL; 
-        return kDNSServiceErr_NoMemory; 
+    if (!sdr)
+    {
+        syslog(LOG_WARNING, "dnssd_clientstub ConnectToServer: malloc failed");
+        *ref = NULL;
+        return kDNSServiceErr_NoMemory;
     }
     sdr->next          = NULL;
     sdr->primary       = NULL;
@@ -571,11 +572,11 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
     if (flags & kDNSServiceFlagsShareConnection)
     {
         DNSServiceOp **p = &(*ref)->next;       // Append ourselves to end of primary's list
-        while (*p) 
+        while (*p)
             p = &(*p)->next;
         *p = sdr;
         // Preincrement counter before we use it -- it helps with debugging if we know the all-zeroes ID should never appear
-        if (++(*ref)->uid.u32[0] == 0) 
+        if (++(*ref)->uid.u32[0] == 0)
             ++(*ref)->uid.u32[1];               // In parent DNSServiceOp increment UID counter
         sdr->primary    = *ref;                 // Set our primary pointer
         sdr->sockfd     = (*ref)->sockfd;       // Inherit primary's socket
@@ -692,7 +693,7 @@ static DNSServiceErrorType ConnectToServer(DNSServiceRef *ref, DNSServiceFlags f
 }
 
 #define deliver_request_bailout(MSG) \
-    do { syslog(LOG_WARNING, "dnssd_clientstub deliver_request: %s failed %d (%s)", (MSG), dnssd_errno, dnssd_strerror(dnssd_errno)); goto cleanup; } while(0)
+    syslog(LOG_WARNING, "dnssd_clientstub deliver_request: %s failed %d (%s)", (MSG), dnssd_errno, dnssd_strerror(dnssd_errno)); goto cleanup
 
 static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
 {
@@ -710,7 +711,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
         syslog(LOG_WARNING, "dnssd_clientstub deliver_request: !hdr");
         return kDNSServiceErr_Unknown;
     }
-    
+
     datalen = hdr->datalen;    // We take a copy here because we're going to convert hdr->datalen to network byte order
     #if defined(USE_TCP_LOOPBACK) || defined(USE_NAMED_ERROR_RETURN_SOCKET)
     data = (char *)hdr + sizeof(ipc_msg_hdr);
@@ -739,14 +740,22 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
             dnssd_sockaddr_t caddr;
             dnssd_socklen_t len = (dnssd_socklen_t) sizeof(caddr);
             listenfd = socket(AF_DNSSD, SOCK_STREAM, 0);
-            if (!dnssd_SocketValid(listenfd)) deliver_request_bailout("TCP socket");
+            if (!dnssd_SocketValid(listenfd)) {
+		deliver_request_bailout("TCP socket");
+	    }
 
             caddr.sin_family      = AF_INET;
             caddr.sin_port        = 0;
             caddr.sin_addr.s_addr = inet_addr(MDNS_TCP_SERVERADDR);
-            if (bind(listenfd, (struct sockaddr*) &caddr, sizeof(caddr)) < 0) deliver_request_bailout("TCP bind");
-            if (getsockname(listenfd, (struct sockaddr*) &caddr, &len)   < 0) deliver_request_bailout("TCP getsockname");
-            if (listen(listenfd, 1)                                      < 0) deliver_request_bailout("TCP listen");
+            if (bind(listenfd, (struct sockaddr*) &caddr, sizeof(caddr)) < 0) {
+		deliver_request_bailout("TCP bind");
+	    }
+            if (getsockname(listenfd, (struct sockaddr*) &caddr, &len) < 0) {
+		deliver_request_bailout("TCP getsockname");
+	    }
+            if (listen(listenfd, 1) < 0) {
+		deliver_request_bailout("TCP listen");
+	    }
             port.s = caddr.sin_port;
             data[0] = port.b[0];  // don't switch the byte order, as the
             data[1] = port.b[1];  // daemon expects it in network byte order
@@ -757,7 +766,9 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
             int bindresult;
             dnssd_sockaddr_t caddr;
             listenfd = socket(AF_DNSSD, SOCK_STREAM, 0);
-            if (!dnssd_SocketValid(listenfd)) deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET socket");
+            if (!dnssd_SocketValid(listenfd)) {
+		deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET socket");
+	    }
 
             caddr.sun_family = AF_LOCAL;
             // According to Stevens (section 3.2), there is no portable way to
@@ -769,13 +780,19 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
             mask = umask(0);
             bindresult = bind(listenfd, (struct sockaddr *)&caddr, sizeof(caddr));
             umask(mask);
-            if (bindresult          < 0) deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET bind");
-            if (listen(listenfd, 1) < 0) deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET listen");
+            if (bindresult < 0) {
+		deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET bind");
+	    }
+            if (listen(listenfd, 1) < 0) {
+		deliver_request_bailout("USE_NAMED_ERROR_RETURN_SOCKET listen");
+	    }
         }
         #else
         {
             dnssd_sock_t sp[2];
-            if (socketpair(AF_DNSSD, SOCK_STREAM, 0, sp) < 0) deliver_request_bailout("socketpair");
+            if (socketpair(AF_DNSSD, SOCK_STREAM, 0, sp) < 0) {
+		deliver_request_bailout("socketpair");
+	    }
             else
             {
                 errsd    = sp[0];   // We'll read our four-byte error code from sp[0]
@@ -799,7 +816,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
     // any associated data does not work reliably -- e.g. one particular issue we ran
     // into is that if the receiving program is in a kqueue loop waiting to be notified
     // of the received message, it doesn't get woken up when the control message arrives.
-    if (MakeSeparateReturnSocket || sdr->op == send_bpf) 
+    if (MakeSeparateReturnSocket || sdr->op == send_bpf)
         datalen--;     // Okay to use sdr->op when checking for op == send_bpf
 #endif
 
@@ -835,7 +852,7 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
     }
 #endif
 
-    if (!MakeSeparateReturnSocket) 
+    if (!MakeSeparateReturnSocket)
         errsd = sdr->sockfd;
     if (MakeSeparateReturnSocket || sdr->op == send_bpf)    // Okay to use sdr->op when checking for op == send_bpf
     {
@@ -845,11 +862,12 @@ static DNSServiceErrorType deliver_request(ipc_msg_hdr *hdr, DNSServiceOp *sdr)
         // set_waitlimit() ensures we do not block indefinitely just in case something is wrong
         dnssd_sockaddr_t daddr;
         dnssd_socklen_t len = sizeof(daddr);
-        if ((err = set_waitlimit(listenfd, DNSSD_CLIENT_TIMEOUT)) != kDNSServiceErr_NoError) 
+        if ((err = set_waitlimit(listenfd, DNSSD_CLIENT_TIMEOUT)) != kDNSServiceErr_NoError)
             goto cleanup;
         errsd = accept(listenfd, (struct sockaddr *)&daddr, &len);
-        if (!dnssd_SocketValid(errsd)) 
+        if (!dnssd_SocketValid(errsd)) {
             deliver_request_bailout("accept");
+	}
 #else
 
         struct iovec vec = { ((char *)hdr) + sizeof(ipc_msg_hdr) + datalen, 1 }; // Send the last byte along with the SCM_RIGHTS
@@ -1415,7 +1433,7 @@ DNSServiceErrorType DNSSD_API DNSServiceResolve
     if ((interfaceIndex == kDNSServiceInterfaceIndexAny) && includeP2PWithIndexAny())
         flags |= kDNSServiceFlagsIncludeP2P;
 
-    err = ConnectToServer(sdRef, flags, resolve_request, handle_resolve_response, callBack, context);
+    err = ConnectToServer(sdRef, flags, resolve_request, handle_resolve_response, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     // Calculate total message length
@@ -1526,7 +1544,7 @@ DNSServiceErrorType DNSSD_API DNSServiceQueryRecord
     if ((interfaceIndex == kDNSServiceInterfaceIndexAny) && includeP2PWithIndexAny())
         flags |= kDNSServiceFlagsIncludeP2P;
 
-    err = ConnectToServer(sdRef, flags, query_request, handle_query_response, callBack, context);
+    err = ConnectToServer(sdRef, flags, query_request, handle_query_response, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     if (!name) name = "\0";
@@ -1663,7 +1681,7 @@ DNSServiceErrorType DNSSD_API DNSServiceGetAddrInfo
 
     if (!sdRef || !hostname || !callBack) return kDNSServiceErr_BadParam;
 
-    err = ConnectToServer(sdRef, flags, addrinfo_request, handle_addrinfo_response, callBack, context);
+    err = ConnectToServer(sdRef, flags, addrinfo_request, handle_addrinfo_response, (void *)callBack, context);
     if (err)
     {
          return err;    // On error ConnectToServer leaves *sdRef set to NULL
@@ -1752,7 +1770,7 @@ DNSServiceErrorType DNSSD_API DNSServiceBrowse
     if ((interfaceIndex == kDNSServiceInterfaceIndexAny) && includeP2PWithIndexAny())
         flags |= kDNSServiceFlagsIncludeP2P;
 
-    err = ConnectToServer(sdRef, flags, browse_request, handle_browse_response, callBack, context);
+    err = ConnectToServer(sdRef, flags, browse_request, handle_browse_response, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     if (!domain) domain = "";
@@ -1855,7 +1873,7 @@ DNSServiceErrorType DNSSD_API DNSServiceRegister
     if ((interfaceIndex == kDNSServiceInterfaceIndexAny) && includeP2PWithIndexAny())
         flags |= kDNSServiceFlagsIncludeP2P;
 
-    err = ConnectToServer(sdRef, flags, reg_service_request, callBack ? handle_regservice_response : NULL, callBack, context);
+    err = ConnectToServer(sdRef, flags, reg_service_request, callBack ? handle_regservice_response : NULL, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     len = sizeof(DNSServiceFlags);
@@ -1921,7 +1939,7 @@ DNSServiceErrorType DNSSD_API DNSServiceEnumerateDomains
     f2 = (flags & kDNSServiceFlagsRegistrationDomains) != 0;
     if (f1 + f2 != 1) return kDNSServiceErr_BadParam;
 
-    err = ConnectToServer(sdRef, flags, enumeration_request, handle_enumeration_response, callBack, context);
+    err = ConnectToServer(sdRef, flags, enumeration_request, handle_enumeration_response, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     len = sizeof(DNSServiceFlags);
@@ -2030,7 +2048,7 @@ DNSServiceErrorType DNSSD_API DNSServiceCreateDelegateConnection(DNSServiceRef *
          return err;    // On error ConnectToServer leaves *sdRef set to NULL
     }
 
-    // Only one of the two options can be set. If pid is zero, uuid is used. 
+    // Only one of the two options can be set. If pid is zero, uuid is used.
     // If both are specified only pid will be used. We send across the pid
     // so that the daemon knows what to read from the socket.
 
@@ -2434,7 +2452,7 @@ DNSServiceErrorType DNSSD_API DNSServiceNATPortMappingCreate
     union { uint16_t s; u_char b[2]; } internalPort = { internalPortInNetworkByteOrder };
     union { uint16_t s; u_char b[2]; } externalPort = { externalPortInNetworkByteOrder };
 
-    DNSServiceErrorType err = ConnectToServer(sdRef, flags, port_mapping_request, handle_port_mapping_response, callBack, context);
+    DNSServiceErrorType err = ConnectToServer(sdRef, flags, port_mapping_request, handle_port_mapping_response, (void *)callBack, context);
     if (err) return err;    // On error ConnectToServer leaves *sdRef set to NULL
 
     len = sizeof(flags);
@@ -2678,7 +2696,7 @@ static DNSServiceErrorType _DNSServiceSleepKeepalive_sockaddr
 
     ka = malloc(sizeof(SleepKAContext));
     if (!ka) return kDNSServiceErr_NoMemory;
-    ka->AppCallback = callBack;
+    ka->AppCallback = (void *)callBack;
     ka->AppContext = context;
 
     err = DNSServiceCreateConnection(sdRef);

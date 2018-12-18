@@ -151,8 +151,6 @@ mDNSexport DNSServer *mDNS_AddDNSServer(mDNS *const m, const domainname *domain,
         isCLAT46      ? ", CLAT46"      : "",
         reqDO         ? ", reqDO"       : "");
 
-    mDNS_CheckLock(m);
-
     // Scan our existing list to see if we already have a matching record for this DNS resolver
     for (p = &m->DNSServers; (server = *p) != mDNSNULL; p = &server->next)
     {
@@ -250,7 +248,7 @@ mDNSexport void PenalizeDNSServer(mDNS *const m, DNSQuestion *q, mDNSOpaque16 re
               (q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL), q, DM_NAME_PARAM(&q->qname), DNSTypeName(q->qtype), q->SuppressUnusable);
 
     // If we get error from any DNS server, remember the error. If all of the servers,
-    // return the error, then return the first error. 
+    // return the error, then return the first error.
     if (mDNSOpaque16IsZero(q->responseFlags))
         q->responseFlags = responseFlags;
 
@@ -1851,7 +1849,10 @@ mDNSlocal void GetZoneData_QuestionCallback(mDNS *const m, DNSQuestion *question
         if (question->ThisQInterval != -1)
             LogMsg("GetZoneData_QuestionCallback: Question %##s (%s) ThisQInterval %d not -1", question->qname.c, DNSTypeName(question->qtype), question->ThisQInterval);
         zd->Addr.type  = mDNSAddrType_IPv4;
-        zd->Addr.ip.v4 = (answer->rdlength == 4) ? answer->rdata->u.ipv4 : zerov4Addr;
+	if (answer->rdlength == 4)
+            zd->Addr.ip.v4 = answer->rdata->u.ipv4;
+	else
+            zd->Addr.ip.v4 = zerov4Addr;
         // In order to simulate firewalls blocking our outgoing TCP connections, returning immediate ICMP errors or TCP resets,
         // the code below will make us try to connect to loopback, resulting in an immediate "port unreachable" failure.
         // This helps us test to make sure we handle this case gracefully
@@ -2269,8 +2270,8 @@ mDNSlocal void UpdateOneSRVRecord(mDNS *m, AuthRecord *rr)
 
     case regState_NATError:
         if (!NATChanged) return;
-        fallthrough();
     // if nat changed, register if we have a target (below)
+	/* FALLTHROUGH */
 
     case regState_NoTarget:
         if (!newtarget->c[0])
@@ -2633,6 +2634,7 @@ mDNSexport void mDNS_RemoveDynDNSHostName(mDNS *m, const domainname *fqdn)
 mDNSexport void mDNS_SetPrimaryInterfaceInfo(mDNS *m, const mDNSAddr *v4addr, const mDNSAddr *v6addr, const mDNSAddr *router)
 {
     mDNSBool v4Changed, v6Changed, RouterChanged;
+    mDNSv6Addr v6;
 
     if (m->mDNS_busy != m->mDNS_reentrancy)
         LogMsg("mDNS_SetPrimaryInterfaceInfo: mDNS_busy (%ld) != mDNS_reentrancy (%ld)", m->mDNS_busy, m->mDNS_reentrancy);
@@ -2644,7 +2646,11 @@ mDNSexport void mDNS_SetPrimaryInterfaceInfo(mDNS *m, const mDNSAddr *v4addr, co
     mDNS_Lock(m);
 
     v4Changed     = !mDNSSameIPv4Address(m->AdvertisedV4.ip.v4, v4addr ? v4addr->ip.v4 : zerov4Addr);
-    v6Changed     = !mDNSSameIPv6Address(m->AdvertisedV6.ip.v6, v6addr ? v6addr->ip.v6 : zerov6Addr);
+    if (v6addr)
+	v6 = v6addr->ip.v6;
+    else
+	v6 = zerov6Addr;
+    v6Changed     = !mDNSSameIPv6Address(m->AdvertisedV6.ip.v6, v6);
     RouterChanged = !mDNSSameIPv4Address(m->Router.ip.v4,       router ? router->ip.v4 : zerov4Addr);
 
     if (v4addr && (v4Changed || RouterChanged))
@@ -4027,7 +4033,7 @@ mDNSexport void RecordRegistrationGotZoneData(mDNS *const m, mStatus err, const 
     int c1, c2;
 
     if (!zoneData) { LogMsg("ERROR: RecordRegistrationGotZoneData invoked with NULL result and no error"); return; }
-    
+
     newRR = (AuthRecord*)zoneData->ZoneDataContext;
 
     if (newRR->nta != zoneData)
@@ -5734,7 +5740,7 @@ mDNSlocal void DNSPushProcessResponse(mDNS *const m, const DNSMessage *const msg
 
         // When we receive DNS Push responses, we assume a long cache lifetime --
         // This path is only reached for DNS Push responses; as long as the connection to the server is
-        // live, the RR should stay ypdated.
+        // live, the RR should stay updated.
         mrr->rroriginalttl = kLLQ_DefLease /* XXX */;
 
         // Use the DNS Server we remember from the question that created this DNS Push server structure.

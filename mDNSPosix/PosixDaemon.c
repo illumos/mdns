@@ -50,6 +50,10 @@ extern int daemon(int, int);
 #include "PlatformCommon.h"
 #include "posix_utilities.h"    // For getLocalTimestamp()
 
+#ifndef MDNSD_USER
+#define	MDNSD_USER "nobody"
+#endif
+
 #define CONFIG_FILE "/etc/mdnsd.conf"
 static domainname DynDNSZone;                // Default wide-area zone for service registration
 static domainname DynDNSHostname;
@@ -119,8 +123,18 @@ mDNSlocal void ParseCmdLinArgs(int argc, char **argv)
     }
 }
 
-mDNSlocal void DumpStateLog()
+mDNSlocal void ToggleLog(void)
+{
+    mDNS_LoggingEnabled = !mDNS_LoggingEnabled;
+}
+
+mDNSlocal void ToggleLogPacket(void)
+{
+    mDNS_PacketLoggingEnabled = !mDNS_PacketLoggingEnabled;
+}
+
 // Dump a little log of what we've been up to.
+mDNSlocal void DumpStateLog()
 {
     char timestamp[64]; // 64 is enough to store the UTC timestmp
     
@@ -145,6 +159,8 @@ mDNSlocal mStatus MainLoop(mDNS *m) // Loop until we quit.
     mDNSPosixListenForSignalInEventLoop(SIGINT);
     mDNSPosixListenForSignalInEventLoop(SIGTERM);
     mDNSPosixListenForSignalInEventLoop(SIGUSR1);
+    mDNSPosixListenForSignalInEventLoop(SIGUSR2);
+    mDNSPosixListenForSignalInEventLoop(SIGINFO);
     mDNSPosixListenForSignalInEventLoop(SIGPIPE);
     mDNSPosixListenForSignalInEventLoop(SIGHUP) ;
 
@@ -171,7 +187,9 @@ mDNSlocal mStatus MainLoop(mDNS *m) // Loop until we quit.
         (void) mDNSPosixRunEventLoopOnce(m, &timeout, &signals, &gotData);
 
         if (sigismember(&signals, SIGHUP )) Reconfigure(m);
-        if (sigismember(&signals, SIGUSR1)) DumpStateLog();
+        if (sigismember(&signals, SIGINFO)) DumpStateLog();
+        if (sigismember(&signals, SIGUSR1)) ToggleLog();
+        if (sigismember(&signals, SIGUSR2)) ToggleLogPacket();
         // SIGPIPE happens when we try to write to a dead client; death should be detected soon in request_callback() and cleaned up.
         if (sigismember(&signals, SIGPIPE)) LogMsg("Received SIGPIPE - ignoring");
         if (sigismember(&signals, SIGINT) || sigismember(&signals, SIGTERM)) break;
@@ -185,7 +203,7 @@ int main(int argc, char **argv)
 
     ParseCmdLinArgs(argc, argv);
 
-    LogMsg("%s starting", mDNSResponderVersionString);
+    LogInfo("%s starting", mDNSResponderVersionString);
 
     err = mDNS_Init(&mDNSStorage, &PlatformStorage, gRRCache, RR_CACHE_SIZE, mDNS_Init_AdvertiseLocalAddresses,
                     mDNS_StatusCallback, mDNS_Init_NoInitCallbackContext);
@@ -198,29 +216,29 @@ int main(int argc, char **argv)
     // Now that we're finished with anything privileged, switch over to running as "nobody"
     if (mStatus_NoError == err)
     {
-        const struct passwd *pw = getpwnam("nobody");
+        const struct passwd *pw = getpwnam(MDNSD_USER);
         if (pw != NULL)
         {
             if (setgid(pw->pw_gid) < 0)
             {
                 LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_ERROR,
-                          "WARNING: mdnsd continuing as group root because setgid to \"nobody\" failed with " PUB_S, strerror(errno));
+                          "WARNING: mdnsd continuing as group root because setgid to \""MDNSD_USER"\" failed with " PUB_S, strerror(errno));
             }
             if (setuid(pw->pw_uid) < 0)
             {
-                LogMsg("WARNING: mdnsd continuing as root because setuid to \"nobody\" failed with %s", strerror(errno));
+                LogMsg("WARNING: mdnsd continuing as root because setuid to \""MDNSD_USER"\" failed with %s", strerror(errno));
             }
         }
         else
         {
-            LogMsg("WARNING: mdnsd continuing as root because user \"nobody\" does not exist");
+            LogMsg("WARNING: mdnsd continuing as root because user \""MDNSD_USER"\" does not exist");
         }
     }
 
     if (mStatus_NoError == err)
         err = MainLoop(&mDNSStorage);
 
-    LogMsg("%s stopping", mDNSResponderVersionString);
+    LogInfo("%s stopping", mDNSResponderVersionString);
 
     mDNS_Close(&mDNSStorage);
 
@@ -271,8 +289,14 @@ asm (".desc ___crashreporter_info__, 0x10");
 #endif
 
 // For convenience when using the "strings" command, this is the last thing in the file
-#if mDNSResponderVersion > 1
-mDNSexport const char mDNSResponderVersionString_SCCS[] = "@(#) mDNSResponder-" STRINGIFY(mDNSResponderVersion) " (" __DATE__ " " __TIME__ ")";
+#if defined(mDNSResponderVersion)
+// Note: The C preprocessor stringify operator ('#') makes a string from its argument, without macro expansion
+// e.g. If "version" is #define'd to be "4", then STRINGIFY_AWE(version) will return the string "version", not "4"
+// To expand "version" to its value before making the string, use STRINGIFY(version) instead
+#define	STRINGIFY_ARGUMENT_WITHOUT_EXPANSION(s) # s
+#define	STRINGIFY(s) STRINGIFY_ARGUMENT_WITHOUT_EXPANSION(s)
+
+mDNSexport const char mDNSResponderVersionString_SCCS[] = "@(#) mDNSResponder-" STRINGIFY(mDNSResponderVersion);
 #elif MDNS_VERSIONSTR_NODTS
 mDNSexport const char mDNSResponderVersionString_SCCS[] = "@(#) mDNSResponder (Engineering Build)";
 #else

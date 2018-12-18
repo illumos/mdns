@@ -74,6 +74,32 @@ struct my_in_pktinfo {
 extern ssize_t recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
                               struct sockaddr *sa, socklen_t *salenptr, struct my_in_pktinfo *pktp, u_char *ttl);
 
+struct ifi_info {
+    char ifi_name[IFI_NAME];    /* interface name, null terminated */
+    u_char ifi_haddr[IFI_HADDR]; /* hardware address */
+    u_short ifi_hlen;           /* #bytes in hardware address: 0, 6, 8 */
+    short ifi_flags;            /* IFF_xxx constants from <net/if.h> */
+    short ifi_myflags;          /* our own IFI_xxx flags */
+    int ifi_index;              /* interface index */
+    struct sockaddr  *ifi_addr; /* primary address */
+    struct sockaddr  *ifi_netmask;
+    struct sockaddr  *ifi_brdaddr; /* broadcast address */
+    struct sockaddr  *ifi_dstaddr; /* destination address */
+    struct ifi_info  *ifi_next; /* next of these structures */
+};
+
+#define IFI_ALIAS   1           /* ifi_addr is an alias */
+
+/* From the text (Stevens, section 16.6): */
+/* 'Since many programs need to know all the interfaces on a system, we will develop a */
+/* function of our own named get_ifi_info that returns a linked list of structures, one */
+/* for each interface that is currently "up."' */
+extern struct ifi_info  *get_ifi_info(int family, int doaliases);
+
+/* 'The free_ifi_info function, which takes a pointer that was */
+/* returned by get_ifi_info and frees all the dynamic memory.' */
+extern void free_ifi_info(struct ifi_info *);
+
 #if defined(AF_INET6) && HAVE_IPV6
 #define INET6_ADDRSTRLEN 46 /*Maximum length of IPv6 address */
 #endif

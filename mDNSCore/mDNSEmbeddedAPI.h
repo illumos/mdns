@@ -308,6 +308,8 @@ typedef const struct mDNSInterfaceID_dummystruct { void *dummy; } *mDNSInterface
 // find you get code that doesn't work consistently on big-endian and little-endian machines.
 #if defined(_WIN32)
  #pragma pack(push,2)
+#elif !defined(__GNUC__)
+ #pragma pack(1)
 #endif
 typedef       union { mDNSu8 b[ 2]; mDNSu16 NotAnInteger; } mDNSOpaque16;
 typedef       union { mDNSu8 b[ 4]; mDNSu32 NotAnInteger; } mDNSOpaque32;
@@ -316,6 +318,8 @@ typedef       union { mDNSu8 b[ 8]; mDNSu16 w[4]; mDNSu32 l[2]; } mDNSOpaque64;
 typedef       union { mDNSu8 b[16]; mDNSu16 w[8]; mDNSu32 l[4]; } mDNSOpaque128;
 #if defined(_WIN32)
  #pragma pack(pop)
+#elif !defined(__GNUC__)
+ #pragma pack()
 #endif
 
 typedef mDNSOpaque16 mDNSIPPort;        // An IP port is a two-byte opaque identifier (not an integer)
@@ -328,7 +332,7 @@ typedef mDNSOpaque48 mDNSEthAddr;       // An Ethernet address is a six-byte opa
 #define bit_set_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] |= (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_clr_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] &= ~(1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_get_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] & (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
-    
+
 // Bit operations for opaque 128 bit quantity. Uses the 32 bit quantity(l[4]) to set and clear bits
 #define bit_set_opaque128(op128, index) (op128.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] |= (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_clr_opaque128(op128, index) (op128.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] &= ~(1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
@@ -807,9 +811,9 @@ typedef packedstruct
 
 typedef enum
 {
-    platform_OSX = 1,   // OSX Platform 
-    platform_iOS,       // iOS Platform 
-    platform_Atv,       // Atv Platform 
+    platform_OSX = 1,   // OSX Platform
+    platform_iOS,       // iOS Platform
+    platform_Atv,       // Atv Platform
     platform_NonApple   // Non-Apple (Windows, POSIX) Platform
 } Platform_t;
 
@@ -820,7 +824,7 @@ typedef enum
 #define kDNSOpt_Lease 2
 #define kDNSOpt_NSID  3
 #define kDNSOpt_Owner 4
-#define kDNSOpt_Trace 65001  // 65001-65534 Reserved for Local/Experimental Use 
+#define kDNSOpt_Trace 65001  // 65001-65534 Reserved for Local/Experimental Use
 
 typedef struct
 {
@@ -1514,7 +1518,7 @@ struct AuthRecord_struct
 #define Question_uDNS(Q)   ((Q)->IsUnicastDotLocal || (Q)->ProxyQuestion || \
                             ((Q)->InterfaceID != mDNSInterface_LocalOnly && (Q)->InterfaceID != mDNSInterface_P2P && (Q)->InterfaceID != mDNSInterface_BLE && !(Q)->ForceMCast && !IsLocalDomain(&(Q)->qname)))
 
-// AuthRecordLocalOnly records are registered using mDNSInterface_LocalOnly and 
+// AuthRecordLocalOnly records are registered using mDNSInterface_LocalOnly and
 // AuthRecordP2P records are created by D2DServiceFound events.  Both record types are kept on the same list.
 #define RRLocalOnly(rr) ((rr)->ARType == AuthRecordLocalOnly || (rr)->ARType == AuthRecordP2P)
 
@@ -1778,7 +1782,7 @@ extern void mDNSPlatformDispatchAsync(mDNS *const m, void *context, AsyncDispatc
                                          (rr)->rrtype == kDNSType_CNAME \
                                          && FollowCNAMEOptionDNSSEC(q))
 
-// RFC 4122 defines it to be 16 bytes 
+// RFC 4122 defines it to be 16 bytes
 #define UUID_SIZE       16
 
 #if MDNSRESPONDER_SUPPORTS(APPLE, METRICS)
@@ -1856,7 +1860,7 @@ struct DNSQuestion_struct
     DupSuppressInfo DupSuppress[DupSuppressInfoSize];
     mDNSInterfaceID SendQNow;               // The interface this query is being sent on right now
     mDNSBool SendOnAll;                     // Set if we're sending this question on all active interfaces
-    mDNSBool CachedAnswerNeedsUpdate;       // See SendQueries().  Set if we're sending this question 
+    mDNSBool CachedAnswerNeedsUpdate;       // See SendQueries().  Set if we're sending this question
                                             // because a cached answer needs to be refreshed.
     mDNSu32 RequestUnicast;                 // Non-zero if we want to send query with kDNSQClass_UnicastResponse bit set
     mDNSs32 LastQTxTime;                    // Last time this Q was sent on one (but not necessarily all) interfaces
@@ -2076,7 +2080,7 @@ struct NetworkInterfaceInfo_struct
     mDNSBool DirectLink;                // a direct link, indicating we can skip the probe for
                                         // address records
     mDNSBool SupportsUnicastMDNSResponse;  // Indicates that the interface supports unicast responses
-                                        // to Bonjour queries.  Generally true for an interface.  
+                                        // to Bonjour queries.  Generally true for an interface.
 };
 
 #define SLE_DELETE                      0x00000001
@@ -2444,7 +2448,7 @@ extern const mDNSOpaque16 uDNSSecQueryFlags;
 
 extern const mDNSOpaque64 zeroOpaque64;
 extern const mDNSOpaque128 zeroOpaque128;
-    
+
 extern mDNSBool StrictUnicastOrdering;
 
 #define localdomain           (*(const domainname *)"\x5" "local")
@@ -2461,6 +2465,8 @@ extern mDNSBool StrictUnicastOrdering;
 #if (defined(_MSC_VER))
     #define mDNSinline static __inline
 #elif ((__GNUC__ > 2) || ((__GNUC__ == 2) && (__GNUC_MINOR__ >= 9)))
+    #define mDNSinline static inline
+#else
     #define mDNSinline static inline
 #endif
 

@@ -52,7 +52,7 @@ extern "C" {
 #define QuestionIntervalStep3 (QuestionIntervalStep*QuestionIntervalStep*QuestionIntervalStep)
 #define InitialQuestionInterval ((mDNSPlatformOneSecond + QuestionIntervalStep-1) / QuestionIntervalStep)
 #define MaxQuestionInterval         (3600 * mDNSPlatformOneSecond)
-#define UDNSBackOffMultiplier 2 
+#define UDNSBackOffMultiplier 2
 #define MinQuestionInterval (1 * mDNSPlatformOneSecond)
 
 // For Unicast record registrations, we initialize the interval to 1 second. When we send any query for
@@ -191,4 +191,4 @@ extern CacheRecord* mDNSCoreReceiveCacheCheck(mDNS *const m, const DNSMessage *c
 }
 #endif
 
-#endif // __UDNS_H_
+#endif // __UDNS_H

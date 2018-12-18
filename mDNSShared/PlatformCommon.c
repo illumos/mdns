@@ -33,7 +33,7 @@
 
 #if APPLE_OSX_mDNSResponder
 #include <os/log.h>
-#endif 
+#endif
 
 #include "mDNSEmbeddedAPI.h"    // Defines the interface provided to the client layer above
 #include "DNSCommon.h"
@@ -196,8 +196,12 @@ mDNSexport void mDNSPlatformSourceAddrForDest(mDNSAddr *const src, const mDNSAdd
     }
     else return;
 
-    if ((connect(sock, &addr.s, inner_len)) < 0)
-    { LogMsg("mDNSPlatformSourceAddrForDest: connect %#a failed errno %d (%s)", dst, errno, strerror(errno)); goto exit; }
+    if ((connect(sock, &addr.s, inner_len)) < 0) {
+	if (errno != ENETUNREACH)
+		LogMsg("mDNSPlatformSourceAddrForDest: connect %#a failed errno %d (%s)", dst, errno,
+		    strerror(errno));
+	goto exit;
+    }
 
     if ((getsockname(sock, &addr.s, &len)) < 0)
     { LogMsg("mDNSPlatformSourceAddrForDest: getsockname failed errno %d (%s)", errno, strerror(errno)); goto exit; }
@@ -398,12 +402,14 @@ mDNSexport mDNSBool mDNSPosixTCPSocketSetup(int *fd, mDNSAddr_Type addrType, mDN
     if (port)
         port->NotAnInteger = outTcpPort->NotAnInteger;
 
+#ifdef TCP_NOTSENT_LOWAT
     err = setsockopt(sock, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &lowWater, sizeof lowWater);
     if (err < 0)
     {
         LogMsg("mDNSPosixTCPSocketSetup: TCP_NOTSENT_LOWAT failed: %s", strerror(errno));
         return mDNSfalse;
     }
+#endif
 
     return mDNStrue;
 }
@@ -448,6 +454,7 @@ mDNSexport TCPSocket *mDNSPosixDoTCPListenCallback(int fd, mDNSAddr_Type address
         goto out;
     }
 
+#ifdef TCP_NOTSENT_LOWAT
     failed = setsockopt(remoteSock, IPPROTO_TCP, TCP_NOTSENT_LOWAT,
                         &lowWater, sizeof lowWater);
     if (failed < 0)
@@ -456,6 +463,7 @@ mDNSexport TCPSocket *mDNSPosixDoTCPListenCallback(int fd, mDNSAddr_Type address
         LogMsg("mDNSPosixDoTCPListenCallback: TCP_NOTSENT_LOWAT returned %d", errno);
         goto out;
     }
+#endif
     
     if (address.sa.sa_family == AF_INET6)
     {

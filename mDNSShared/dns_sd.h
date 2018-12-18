@@ -171,11 +171,11 @@ struct sockaddr;
  * The reliable way to test whether a particular bit is set is not with an equality test,
  * but with a bitwise mask:
  *     if (flags & kDNSServiceFlagsAdd) ...
- * With the exception of kDNSServiceFlagsValidate, each flag can be valid(be set) 
+ * With the exception of kDNSServiceFlagsValidate, each flag can be valid(be set)
  * EITHER only as an input to one of the DNSService*() APIs OR only as an output
  * (provide status) through any of the callbacks used. For example, kDNSServiceFlagsAdd
  * can be set only as an output in the callback, whereas the kDNSServiceFlagsIncludeP2P
- * can be set only as an input to the DNSService*() APIs. See comments on kDNSServiceFlagsValidate  
+ * can be set only as an input to the DNSService*() APIs. See comments on kDNSServiceFlagsValidate
  * defined in enum below.
  */
 enum
@@ -253,7 +253,7 @@ enum
     kDNSServiceFlagsForce               = 0x800,    // This flag is deprecated.
 
     kDNSServiceFlagsKnownUnique         = 0x800,
-    /* 
+    /*
      * Client guarantees that record names are unique, so we can skip sending out initial
      * probe messages.  Standard name conflict resolution is still done if a conflict is discovered.
      */
@@ -347,8 +347,8 @@ enum
      * 5. Thread Safety
      * The dns_sd.h API does not presuppose any particular threading model, and consequently
      * does no locking internally (which would require linking with a specific threading library).
-     * If the client concurrently, from multiple threads (or contexts), calls API routines using 
-     * the same DNSServiceRef, it is the client's responsibility to provide mutual exclusion for 
+     * If the client concurrently, from multiple threads (or contexts), calls API routines using
+     * the same DNSServiceRef, it is the client's responsibility to provide mutual exclusion for
      * that DNSServiceRef.
      *
      * For example, use of DNSServiceRefDeallocate requires caution. A common mistake is as follows:
@@ -397,7 +397,7 @@ enum
 
     kDNSServiceFlagsBackgroundTrafficClass  = 0x80000,
     /*
-    * This flag is meaningful for Unicast DNS queries. When set, it uses the background traffic 
+    * This flag is meaningful for Unicast DNS queries. When set, it uses the background traffic
     * class for packets that service the request.
     */
 
@@ -414,20 +414,20 @@ enum
 
     kDNSServiceFlagsValidate               = 0x200000,
    /*
-    * This flag is meaningful in DNSServiceGetAddrInfo and DNSServiceQueryRecord. This is the ONLY flag to be valid 
+    * This flag is meaningful in DNSServiceGetAddrInfo and DNSServiceQueryRecord. This is the ONLY flag to be valid
     * as an input to the APIs and also an output through the callbacks in the APIs.
     *
-    * When this flag is passed to DNSServiceQueryRecord and DNSServiceGetAddrInfo to resolve unicast names, 
-    * the response  will be validated using DNSSEC. The validation results are delivered using the flags field in 
+    * When this flag is passed to DNSServiceQueryRecord and DNSServiceGetAddrInfo to resolve unicast names,
+    * the response  will be validated using DNSSEC. The validation results are delivered using the flags field in
     * the callback and kDNSServiceFlagsValidate is marked in the flags to indicate that DNSSEC status is also available.
-    * When the callback is called to deliver the query results, the validation results may or may not be available. 
+    * When the callback is called to deliver the query results, the validation results may or may not be available.
     * If it is not delivered along with the results, the validation status is delivered when the validation completes.
-    * 
+    *
     * When the validation results are delivered in the callback, it is indicated by marking the flags with
     * kDNSServiceFlagsValidate and kDNSServiceFlagsAdd along with the DNSSEC status flags (described below) and a NULL
     * sockaddr will be returned for DNSServiceGetAddrInfo and zero length rdata will be returned for DNSServiceQueryRecord.
     * DNSSEC validation results are for the whole RRSet and not just individual records delivered in the callback. When
-    * kDNSServiceFlagsAdd is not set in the flags, applications should implicitly assume that the DNSSEC status of the 
+    * kDNSServiceFlagsAdd is not set in the flags, applications should implicitly assume that the DNSSEC status of the
     * RRSet that has been delivered up until that point is not valid anymore, till another callback is called with
     * kDNSServiceFlagsAdd and kDNSServiceFlagsValidate.
     *
@@ -439,7 +439,7 @@ enum
     kDNSServiceFlagsSecure                 = 0x200010,
    /*
     * The response has been validated by verifying all the signatures in the response and was able to
-    * build a successful authentication chain starting from a known trust anchor.   
+    * build a successful authentication chain starting from a known trust anchor.
     */
 
     kDNSServiceFlagsInsecure               = 0x200020,
@@ -505,11 +505,11 @@ enum
      * should not rely on this behavior being supported in any given software release.
      *
      * When kDNSServiceFlagsThresholdReached is set in the client callback add or remove event,
-     * it indicates that the browse answer threshold has been reached and no 
+     * it indicates that the browse answer threshold has been reached and no
      * browse requests will be generated on the network until the number of answers falls
      * below the threshold value.  Add and remove events can still occur based
      * on incoming Bonjour traffic observed by the system.
-     * The set of services return to the client is not guaranteed to represent the 
+     * The set of services return to the client is not guaranteed to represent the
      * entire set of services present on the network once the threshold has been reached.
      *
      * Note, while kDNSServiceFlagsThresholdReached and kDNSServiceFlagsThresholdOne
@@ -739,7 +739,7 @@ enum
  * the backslash ('\') character, which is the DNS escape character, and
  * the ASCII NUL (0) byte value, which is the C-string terminator character.
  * The escape character ('\') is interpreted as described below:
- * 
+ *
  *   '\ddd', where ddd is a three-digit decimal value from 000 to 255,
  *        represents a single literal byte with that value. Any byte value may be
  *        represented in '\ddd' format, even characters that don't strictly need to be escaped.
@@ -876,7 +876,7 @@ enum
  *
  * - If kDNSServiceInterfaceIndexP2P is passed to DNSServiceResolve, it is
  *   mapped internally to kDNSServiceInterfaceIndexAny with the kDNSServiceFlagsIncludeP2P
- *   set, because resolving a P2P service may create and/or enable an interface whose 
+ *   set, because resolving a P2P service may create and/or enable an interface whose
  *   index is not known a priori. The resolve callback will indicate the index of the
  *   interface via which the service can be accessed.
  *

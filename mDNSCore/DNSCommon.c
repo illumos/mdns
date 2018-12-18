@@ -1333,9 +1333,9 @@ mDNSexport mDNSu32 RDataHashValue(const ResourceRecord *const rr)
         sum = DomainNameHashValue((domainname *)rdb->data);
         ptr += dlen;
         len -= dlen;
-        fallthrough();
         /* FALLTHROUGH */
     }
+    /* FALLTHROUGH */
 
     default:
     {
@@ -2071,12 +2071,12 @@ mDNSexport mDNSu8 *putRData(const DNSMessage *const msg, mDNSu8 *ptr, const mDNS
         int len = 0;
         const rdataOPT *opt;
         const rdataOPT *const end = (const rdataOPT *)&rr->rdata->u.data[rr->rdlength];
-        for (opt = &rr->rdata->u.opt[0]; opt < end; opt++) 
+        for (opt = &rr->rdata->u.opt[0]; opt < end; opt++)
             len += DNSOpt_Data_Space(opt);
-        if (ptr + len > limit) 
-        { 
-            LogMsg("ERROR: putOptRData - out of space"); 
-            return mDNSNULL; 
+        if (ptr + len > limit)
+        {
+            LogMsg("ERROR: putOptRData - out of space");
+            return mDNSNULL;
         }
         for (opt = &rr->rdata->u.opt[0]; opt < end; opt++)
         {
@@ -4121,7 +4121,7 @@ decimal:    if (!F.havePrecision)
 
             case 'p':  F.havePrecision = F.lSize = 1;
                 F.precision = sizeof(void*) * 2;                // 8 characters on 32-bit; 16 characters on 64-bit
-                fallthrough();
+		/* FALLTHROUGH */
             case 'X':  digits = kHexDigitsUppercase;
                 goto hexadecimal;
             case 'x':  digits = kHexDigitsLowercase;

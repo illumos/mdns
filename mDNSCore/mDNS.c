@@ -518,7 +518,7 @@ mDNSlocal NetworkInterfaceInfo *FirstIPv4LLInterfaceForID(mDNS *const m, const m
     if (!InterfaceID)
         return mDNSNULL;
 
-    // Note: We don't check for InterfaceActive, as the active interface could be IPv6 and 
+    // Note: We don't check for InterfaceActive, as the active interface could be IPv6 and
     // we still want to find the first IPv4 Link-Local interface
     for (intf = m->HostInterfaces; intf; intf = intf->next)
     {
@@ -1114,7 +1114,7 @@ mDNSlocal void InitializeLastAPTime(mDNS *const m, AuthRecord *const rr)
         }
         rr->LastAPTime = m->SuppressProbes - rr->ThisAPInterval;
     }
-    // Skip kDNSRecordTypeKnownUnique and kDNSRecordTypeShared records here and set their LastAPTime in the "else" block below so 
+    // Skip kDNSRecordTypeKnownUnique and kDNSRecordTypeShared records here and set their LastAPTime in the "else" block below so
     // that they get announced immediately, otherwise, their announcement would be delayed until the based on the SuppressProbes value.
     else if ((rr->resrec.RecordType != kDNSRecordTypeKnownUnique) && (rr->resrec.RecordType != kDNSRecordTypeShared) && m->SuppressProbes && (m->SuppressProbes - m->timenow >= 0))
         rr->LastAPTime = m->SuppressProbes - rr->ThisAPInterval + DefaultProbeIntervalForTypeUnique * DefaultProbeCountForTypeUnique + rr->ThisAPInterval / 2;
@@ -1543,7 +1543,7 @@ mDNSlocal void IncrementAutoTargetServices(mDNS *const m, AuthRecord *const rr)
         }
         // If this is the first advertised service and we did not just enable Bonjour above, then
         // advertise all the interface records.  If we did enable Bonjour above, the interface records will
-        // be advertised during the network changed processing scheduled above, so no need 
+        // be advertised during the network changed processing scheduled above, so no need
         // to do it here.
         if (!enablingBonjour) AdvertiseNecessaryInterfaceRecords(m);
     }
@@ -2555,7 +2555,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
     // *ptr++ = tpa->b[0xF];
 
     // 0x06 Source address (Note: Since we don't currently set the BIOCSHDRCMPLT option, BPF will fill in the real interface address for us)
-    for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+    for (i=0; i<6; i++)
+	if (tha)
+	    *ptr++ = tha->b[i];
+	else
+	    *ptr++ = intf->MAC.b[i];
 
     // 0x0C IPv6 Ethertype (0x86DD)
     *ptr++ = 0x86; *ptr++ = 0xDD;
@@ -2592,7 +2596,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
         {
             *ptr++ = NDP_SrcLL; // Option Type 1 == Source Link-layer Address
             *ptr++ = 0x01;      // Option length 1 (in units of 8 octets)
-            for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+            for (i=0; i<6; i++)
+		if (tha)
+		    *ptr++ = tha->b[i];
+		else
+		    *ptr++ = intf->MAC.b[i];
         }
     }
     else            // Neighbor Advertisement. The NDP "target" is the address we're giving information about.
@@ -2602,7 +2610,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
         // 0x4E Target Link-layer Address
         *ptr++ = NDP_TgtLL; // Option Type 2 == Target Link-layer Address
         *ptr++ = 0x01;      // Option length 1 (in units of 8 octets)
-        for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+        for (i=0; i<6; i++)
+	    if (tha)
+		*ptr++ = tha->b[i];
+	    else
+		*ptr++ = intf->MAC.b[i];
     }
 
     // 0x4E or 0x56 Total NDP Packet length 78 or 86 bytes
@@ -3690,7 +3702,7 @@ mDNSlocal void SendQueries(mDNS *const m)
             // treat this as logically a repeat of the last transmission, without advancing the interval
             if (m->timenow - (q->LastQTime + (q->ThisQInterval/2)) >= 0)
             {
-                // If we have reached the answer threshold for this question, 
+                // If we have reached the answer threshold for this question,
                 // don't send it again until MaxQuestionInterval unless:
                 //  one of its cached answers needs to be refreshed,
                 //  or it's the initial query for a kDNSServiceFlagsThresholdFinder mode browse.
@@ -4480,6 +4492,7 @@ mDNSlocal void CacheRecordAdd(mDNS *const m, CacheRecord *cr)
     {
         if (CacheRecordAnswersQuestion(cr, q))
         {
+	    mDNSIPPort zp = zeroIPPort;
             // If this question is one that's actively sending queries, and it's received ten answers within one
             // second of sending the last query packet, then that indicates some radical network topology change,
             // so reset its exponential backoff back to the start. We must be at least at the eight-second interval
@@ -4846,7 +4859,7 @@ mDNSlocal void CheckCacheExpiration(mDNS *const m, const mDNSu32 slot, CacheGrou
 // If "CheckOnly" is set to "true", the question won't be answered but just check to see if there is an answer and
 // returns true if there is an answer.
 //
-// If "CheckOnly" is set to "false", the question will be answered if there is a LocalOnly/P2P record and 
+// If "CheckOnly" is set to "false", the question will be answered if there is a LocalOnly/P2P record and
 // returns true to indicate the same.
 mDNSlocal mDNSBool AnswerQuestionWithLORecord(mDNS *const m, DNSQuestion *q, mDNSBool checkOnly)
 {
@@ -7936,7 +7949,7 @@ mDNSlocal mDNSu8 *ProcessQuery(mDNS *const m, const DNSMessage *const query, con
             mDNSBool SendMulticastResponse = mDNSfalse;     // Send modern multicast response
             mDNSBool SendUnicastResponse   = mDNSfalse;     // Send modern unicast response (not legacy unicast response)
 
-            // If it's been one TTL/4 since we multicast this, then send a multicast response 
+            // If it's been one TTL/4 since we multicast this, then send a multicast response
             // for conflict detection, etc.
             if ((mDNSu32)(m->timenow - rr->LastMCTime) >= (mDNSu32)TicksTTL(rr)/4)
             {
@@ -8212,7 +8225,10 @@ mDNSlocal DNSQuestion *ExpectingUnicastResponseForRecord(mDNS *const m,
                     mDNSIPPort srcp;
                     if (!tcp)
                     {
-                        srcp = q->LocalSocket ? q->LocalSocket->port : zeroIPPort;
+			if (q->LocalSocket)
+                            srcp = q->LocalSocket->port;
+			else
+                            srcp = zeroIPPort;
                     }
                     else
                     {
@@ -9232,7 +9248,7 @@ mDNSlocal void mDNSCoreReceiveResponse(mDNS *const m, const DNSMessage *const re
                     //
                     // We could potentially lookup the DNS server based on the source address, but that may not work always
                     // and that's why ExpectingUnicastResponseForRecord does not try to verify whether the response came
-                    // from the DNS server that queried. We follow the same logic here. If we can find a matching quetion based
+                    // from the DNS server that queried. We follow the same logic here. If we can find a matching question based
                     // on the "id" and "source port", then this response answers the question and assume the response
                     // came from the same DNS server that we sent the query to.
                     q = ExpectingUnicastResponseForRecord(m, srcaddr, ResponseSrcLocal, dstport, response->h.id, &m->rec.r, !dstaddr);
@@ -9799,7 +9815,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
     int     i;
     mDNSs8  hval   = 0;
     int     colons = 0;
-    mDNSu8  val    = 0;
+    mDNSu16  val    = 0; /* need to use 16 bit int to detect overflow */
 
     for (i = 0; ptr < limit && *ptr != ' ' && i < 17; i++, ptr++)
     {
@@ -9816,7 +9832,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
                 LogMsg("GetValueForMACAddr: Address malformed colons %d val %d", colons, val);
                 return mDNSNULL;
             }
-            eth->b[colons] = val;
+            eth->b[colons] = (mDNSs8)val;
             colons++;
             val = 0;
         }
@@ -9826,7 +9842,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
         LogMsg("GetValueForMACAddr: Address malformed colons %d", colons);
         return mDNSNULL;
     }
-    eth->b[colons] = val;
+    eth->b[colons] = (mDNSs8)val;
     return ptr;
 }
 
@@ -11659,8 +11675,8 @@ mDNSlocal void RestartUnicastQuestions(mDNS *const m)
 }
 #endif
 
-// ValidateParameters() is called by mDNS_StartQuery_internal() to check the client parameters of 
-// DNS Question that are already set by the client before calling mDNS_StartQuery() 
+// ValidateParameters() is called by mDNS_StartQuery_internal() to check the client parameters of
+// DNS Question that are already set by the client before calling mDNS_StartQuery()
 mDNSlocal mStatus ValidateParameters(mDNS *const m, DNSQuestion *const question)
 {
     if (!ValidateDomainName(&question->qname))
@@ -11745,7 +11761,7 @@ mDNSlocal void InitDNSConfig(mDNS *const m, DNSQuestion *const question)
                   "[R%u->Q%u] InitDNSConfig: Setting StopTime on the uDNS question %p " PRI_DM_NAME " (" PUB_S ")",
                   question->request_id, mDNSVal16(question->TargetQID), question, DM_NAME_PARAM(&question->qname), DNSTypeName(question->qtype));
     }
-    // Set StopTime here since it is a part of DNS Configuration 
+    // Set StopTime here since it is a part of DNS Configuration
     if (question->StopTime)
         SetNextQueryStopTime(m, question);
     // Don't call SetNextQueryTime() if a LocalOnly OR P2P Question since those questions
@@ -11922,7 +11938,7 @@ mDNSlocal void InitLLQState(DNSQuestion *const question)
 }
 
 // InitDNSSECProxyState() is called by mDNS_StartQuery_internal() to initialize
-// DNSSEC & DNS Proxy fields of the DNS Question. 
+// DNSSEC & DNS Proxy fields of the DNS Question.
 mDNSlocal void InitDNSSECProxyState(mDNS *const m, DNSQuestion *const question)
 {
     (void) m;
@@ -12354,7 +12370,7 @@ mDNSexport mStatus mDNS_StopQueryWithRemoves(mDNS *const m, DNSQuestion *const q
             {
                 // Don't use mDNS_DropLockBeforeCallback() here, since we don't allow API calls
                 if (question->QuestionCallback)
-                    question->QuestionCallback(m, question, &cr->resrec, mDNSfalse);
+                    question->QuestionCallback(m, question, &cr->resrec, QC_rmv);
             }
         }
     }
@@ -12751,7 +12767,7 @@ mDNSlocal void DeadvertiseInterface(mDNS *const m, NetworkInterfaceInfo *set, De
 #endif
 }
 
-// Change target host name for record.  
+// Change target host name for record.
 mDNSlocal void UpdateTargetHostName(mDNS *const m, AuthRecord *const rr)
 {
 #if MDNSRESPONDER_SUPPORTS(APPLE, D2D)
@@ -12972,7 +12988,7 @@ mDNSexport void mDNS_DeactivateNetWake_internal(mDNS *const m, NetworkInterfaceI
         if (m->SPSBrowseCallback)
         {
             mDNS_DropLockBeforeCallback();      // Allow client to legally make mDNS API calls from the callback
-            m->SPSBrowseCallback(m, &set->NetWakeBrowse, mDNSNULL, mDNSfalse);
+            m->SPSBrowseCallback(m, &set->NetWakeBrowse, mDNSNULL, QC_rmv);
             mDNS_ReclaimLockAfterCallback();    // Decrement mDNS_reentrancy to block mDNS API calls again
         }
 
@@ -13337,7 +13353,7 @@ mDNSexport void mDNS_DeregisterInterface(mDNS *const m, NetworkInterfaceInfo *se
                     // postpone deleting the cache records in case the interface comes back again
                     if (set->McastTxRx && (activationSpeed == SlowActivation))
                     {
-                        // For a flapping interface we want these records to go away after 
+                        // For a flapping interface we want these records to go away after
                         // kDefaultReconfirmTimeForFlappingInterface seconds if they are not reconfirmed.
                         mDNS_Reconfirm_internal(m, rr, kDefaultReconfirmTimeForFlappingInterface);
                         // We set UnansweredQueries = MaxUnansweredQueries so we don't waste time doing any queries for them --
@@ -13986,7 +14002,9 @@ mDNSlocal void mDNSCoreReceiveRawARP(mDNS *const m, const ARP_EthIP *const arp, 
                 }
                 else if (msg == msg4)
                 {
-                    SendARP(m, 2, rr, (mDNSv4Addr *)arp->tpa.b, &arp->sha, (mDNSv4Addr *)arp->spa.b, &arp->sha);
+		    mDNSv4Addr tpa = arp->tpa;
+		    mDNSv4Addr spa = arp->spa;
+                    SendARP(m, 2, rr, &tpa, &arp->sha, &spa, &arp->sha);
                 }
             }
     }
@@ -14610,7 +14628,7 @@ mDNSlocal mStatus mDNS_InitStorage(mDNS *const m, mDNS_PlatformSupport *const p,
     m->WABBrowseQueriesCount    = 0;
     m->WABLBrowseQueriesCount   = 0;
     m->WABRegQueriesCount       = 0;
-    m->AutoTargetServices       = 0;
+    m->AutoTargetServices       = 1;
 
 #if MDNSRESPONDER_SUPPORTS(APPLE, BONJOUR_ON_DEMAND)
     m->NumAllInterfaceRecords   = 0;
