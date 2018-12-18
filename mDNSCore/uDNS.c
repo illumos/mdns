@@ -137,8 +137,6 @@ mDNSexport DNSServer *mDNS_AddDNSServer(mDNS *const m, const domainname *d, cons
         NumUnicastDNSServers, addr, d->c, interface, serviceID, scoped, resGroupID,
         TrueFalseStr(reqA), TrueFalseStr(reqAAAA), TrueFalseStr(cellIntf), TrueFalseStr(isExpensive), TrueFalseStr(isCLAT46), TrueFalseStr(reqDO));
 
-    mDNS_CheckLock(m);
-
     while (*p)  // Check if we already have this {interface,address,port,domain} tuple registered + reqA/reqAAAA bits
     {
         if ((*p)->scoped == scoped && (*p)->interface == interface && (*p)->serviceID == serviceID &&
@@ -1879,7 +1877,10 @@ mDNSlocal void GetZoneData_QuestionCallback(mDNS *const m, DNSQuestion *question
         if (question->ThisQInterval != -1)
             LogMsg("GetZoneData_QuestionCallback: Question %##s (%s) ThisQInterval %d not -1", question->qname.c, DNSTypeName(question->qtype), question->ThisQInterval);
         zd->Addr.type  = mDNSAddrType_IPv4;
-        zd->Addr.ip.v4 = (answer->rdlength == 4) ? answer->rdata->u.ipv4 : zerov4Addr;
+	if (answer->rdlength == 4)
+            zd->Addr.ip.v4 = answer->rdata->u.ipv4;
+	else
+            zd->Addr.ip.v4 = zerov4Addr;
         // In order to simulate firewalls blocking our outgoing TCP connections, returning immediate ICMP errors or TCP resets,
         // the code below will make us try to connect to loopback, resulting in an immediate "port unreachable" failure.
         // This helps us test to make sure we handle this case gracefully
@@ -2330,7 +2331,8 @@ mDNSlocal void UpdateOneSRVRecord(mDNS *m, AuthRecord *rr)
 
     case regState_NATError:
         if (!NATChanged) return;
-    // if nat changed, register if we have a target (below)
+	// if nat changed, register if we have a target (below)
+	/* FALLTHROUGH */
 
     case regState_NoTarget:
         if (!newtarget->c[0])
@@ -2701,6 +2703,7 @@ mDNSexport void mDNS_RemoveDynDNSHostName(mDNS *m, const domainname *fqdn)
 mDNSexport void mDNS_SetPrimaryInterfaceInfo(mDNS *m, const mDNSAddr *v4addr, const mDNSAddr *v6addr, const mDNSAddr *router)
 {
     mDNSBool v4Changed, v6Changed, RouterChanged;
+    mDNSv6Addr v6;
 
     if (m->mDNS_busy != m->mDNS_reentrancy)
         LogMsg("mDNS_SetPrimaryInterfaceInfo: mDNS_busy (%ld) != mDNS_reentrancy (%ld)", m->mDNS_busy, m->mDNS_reentrancy);
@@ -2712,7 +2715,11 @@ mDNSexport void mDNS_SetPrimaryInterfaceInfo(mDNS *m, const mDNSAddr *v4addr, co
     mDNS_Lock(m);
 
     v4Changed     = !mDNSSameIPv4Address(m->AdvertisedV4.ip.v4, v4addr ? v4addr->ip.v4 : zerov4Addr);
-    v6Changed     = !mDNSSameIPv6Address(m->AdvertisedV6.ip.v6, v6addr ? v6addr->ip.v6 : zerov6Addr);
+    if (v6addr)
+	v6 = v6addr->ip.v6;
+    else
+	v6 = zerov6Addr;
+    v6Changed     = !mDNSSameIPv6Address(m->AdvertisedV6.ip.v6, v6);
     RouterChanged = !mDNSSameIPv4Address(m->Router.ip.v4,       router ? router->ip.v4 : zerov4Addr);
 
     if (v4addr && (v4Changed || RouterChanged))
@@ -4198,7 +4205,7 @@ mDNSexport void RecordRegistrationGotZoneData(mDNS *const m, mStatus err, const 
     int c1, c2;
 
     if (!zoneData) { LogMsg("ERROR: RecordRegistrationGotZoneData invoked with NULL result and no error"); return; }
-    
+
     newRR = (AuthRecord*)zoneData->ZoneDataContext;
 
     if (newRR->nta != zoneData)
@@ -4709,8 +4716,9 @@ mDNSexport void uDNS_CheckCurrentQuestion(mDNS *const m)
             new = GetServerForQuestion(m, q);
             if (new)
             {
+		mDNSIPPort zp = zeroIPPort;
                 LogInfo("uDNS_checkCurrentQuestion: Retrying question %p %##s (%s) DNS Server %#a:%d ThisQInterval %d",
-                        q, q->qname.c, DNSTypeName(q->qtype), new ? &new->addr : mDNSNULL, mDNSVal16(new ? new->port : zeroIPPort), q->ThisQInterval);
+                        q, q->qname.c, DNSTypeName(q->qtype), new ? &new->addr : mDNSNULL, mDNSVal16(new? new->port : zp), q->ThisQInterval);
                 DNSServerChangeForQuestion(m, q, new);
             }
             for (qptr = q->next ; qptr; qptr = qptr->next)
@@ -4745,6 +4753,7 @@ mDNSexport void uDNS_CheckCurrentQuestion(mDNS *const m)
                 }
                 else
                 {
+		    mDNSIPPort zp = zeroIPPort;
                     debugf("uDNS_CheckCurrentQuestion sending %p %##s (%s) %#a:%d UnansweredQueries %d",
                            q, q->qname.c, DNSTypeName(q->qtype),
                            q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL, mDNSVal16(q->qDNSServer ? q->qDNSServer->port : zeroIPPort), q->unansweredQueries);
@@ -4907,9 +4916,12 @@ mDNSexport void uDNS_CheckCurrentQuestion(mDNS *const m)
                     q->qDNSServer = GetServerForQuestion(m, q);
                     for (qptr = q->next ; qptr; qptr = qptr->next)
                         if (qptr->DuplicateOf == q) { qptr->validDNSServers = q->validDNSServers; qptr->qDNSServer = q->qDNSServer; }
-                    LogInfo("uDNS_checkCurrentQuestion: Tried all DNS servers, retry question %p SuppressUnusable %d %##s (%s) with DNS Server %#a:%d after 60 seconds, ThisQInterval %d",
+		    {
+			mDNSIPPort zp = zeroIPPort;
+                        LogInfo("uDNS_checkCurrentQuestion: Tried all DNS servers, retry question %p SuppressUnusable %d %##s (%s) with DNS Server %#a:%d after 60 seconds, ThisQInterval %d",
                             q, q->SuppressUnusable, q->qname.c, DNSTypeName(q->qtype),
-                            q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL, mDNSVal16(q->qDNSServer ? q->qDNSServer->port : zeroIPPort), q->ThisQInterval);
+                            q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL, mDNSVal16(q->qDNSServer ? q->qDNSServer->port : zp), q->ThisQInterval);
+		    }
                 }
             }
             else

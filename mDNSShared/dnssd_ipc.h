@@ -156,6 +156,8 @@ typedef enum
 
 #if defined(_WIN64)
 #   pragma pack(push,4)
+#elif !defined(__GNUC__)
+#   pragma pack(1)
 #endif
 
 // Define context object big enough to hold a 64-bit pointer,
@@ -181,6 +183,8 @@ typedef packedstruct
 
 #if defined(_WIN64)
 #   pragma pack(pop)
+#elif !defined(__GNUC__)
+#   pragma pack()
 #endif
 
 // routines to write to and extract data from message buffers.

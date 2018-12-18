@@ -198,6 +198,9 @@ mDNSexport mStatus mDNSPlatformSendUDP(const mDNS *const m, const void *const ms
         if (!mDNSAddressIsAllDNSLinkGroup(dst))
             if (errno == EHOSTDOWN || errno == ENETDOWN || errno == EHOSTUNREACH || errno == ENETUNREACH) return(mStatus_TransientErr);
 
+	/* dont report ENETUNREACH */
+	if (errno == ENETUNREACH) return(mStatus_TransientErr);
+
         if (MessageCount < 1000)
         {
             MessageCount++;
@@ -434,10 +437,10 @@ mDNSexport mDNSBool mDNSPlatformSetDNSConfig(mDNSBool setservers, mDNSBool setse
     DNameListElem **BrowseDomains, mDNSBool ackConfig)
 {
     (void) setservers;
-    (void) fqdn;
+    if (fqdn) fqdn->c[0] = 0;
     (void) setsearch;
-    (void) RegDomains;
-    (void) BrowseDomains;
+    if (RegDomains) *RegDomains = NULL;
+    if (BrowseDomains) *BrowseDomains = NULL;
     (void) ackConfig;
 
     return mDNStrue;
@@ -660,10 +663,9 @@ mDNSlocal int SetupSocket(struct sockaddr *intfAddr, mDNSIPPort port, int interf
         // Enable inbound packets on IFEF_AWDL interface.
         // Only done for multicast sockets, since we don't expect unicast socket operations
         // on the IFEF_AWDL interface. Operation is a no-op for other interface types.
-        #ifndef SO_RECV_ANYIF
-        #define SO_RECV_ANYIF   0x1104      /* unrestricted inbound processing */
-        #endif
+	#ifdef SO_RECV_ANYIF
         if (setsockopt(*sktPtr, SOL_SOCKET, SO_RECV_ANYIF, &kOn, sizeof(kOn)) < 0) perror("setsockopt - SO_RECV_ANYIF");
+	#endif
     }
 
     // We want to receive destination addresses and interface identifiers.
@@ -749,7 +751,13 @@ mDNSlocal int SetupSocket(struct sockaddr *intfAddr, mDNSIPPort port, int interf
     {
         struct ipv6_mreq imr6;
         struct sockaddr_in6 bindAddr6;
-    #if defined(IPV6_PKTINFO)
+    #if defined(IPV6_RECVPKTINFO) // Solaris
+	if (err == 0)
+	{
+	    err = setsockopt(*sktPtr, IPPROTO_IPV6, IPV6_RECVPKTINFO, &kOn, sizeof(kOn));
+	    if (err < 0) { err = errno; perror("setsockopt - IPV6_RECVPKTINFO"); }
+	}
+    #elif defined(IPV6_PKTINFO)
         if (err == 0)
         {
             err = setsockopt(*sktPtr, IPPROTO_IPV6, IPV6_2292_PKTINFO, &kOn, sizeof(kOn));
@@ -758,7 +766,13 @@ mDNSlocal int SetupSocket(struct sockaddr *intfAddr, mDNSIPPort port, int interf
     #else
         #warning This platform has no way to get the destination interface information for IPv6 -- will only work for single-homed hosts
     #endif
-    #if defined(IPV6_HOPLIMIT)
+    #if defined(IPV6_RECVHOPLIMIT)
+	if (err == 0)
+	{
+	    err = setsockopt(*sktPtr, IPPROTO_IPV6, IPV6_RECVHOPLIMIT, &kOn, sizeof(kOn));
+	    if (err < 0) { err = errno; perror("setsockopt - IPV6_RECVHOPLIMIT"); }
+	}
+    #elif defined(IPV6_HOPLIMIT)
         if (err == 0)
         {
             err = setsockopt(*sktPtr, IPPROTO_IPV6, IPV6_2292_HOPLIMIT, &kOn, sizeof(kOn));
@@ -1190,13 +1204,23 @@ mDNSlocal mDNSu32       ProcessRoutingNotification(int sd)
 #endif
 
     // Process the message
-    if (pRSMsg->ifam_type == RTM_NEWADDR || pRSMsg->ifam_type == RTM_DELADDR ||
-        pRSMsg->ifam_type == RTM_IFINFO)
+    switch (pRSMsg->ifam_type)
     {
+    case RTM_NEWADDR:
+    case RTM_DELADDR:
+    case RTM_IFINFO:
+    /*
+     * ADD & DELETE are happening when IPv6 announces are changing,
+     * and for some reason it will stop mdnsd to announce IPv6
+     * addresses. So we force mdnsd to check interfaces.
+     */
+    case RTM_ADD:
+    case RTM_DELETE:
         if (pRSMsg->ifam_type == RTM_IFINFO)
             result |= 1 << ((struct if_msghdr*) pRSMsg)->ifm_index;
         else
             result |= 1 << pRSMsg->ifam_index;
+    break;
     }
 
     return result;
@@ -1313,7 +1337,8 @@ mDNSexport mStatus mDNSPlatformInit(mDNS *const m)
         // Failure to observe interface changes is non-fatal.
         if (err != mStatus_NoError)
         {
-            fprintf(stderr, "mDNS(%d) WARNING: Unable to detect interface changes (%d).\n", getpid(), err);
+            fprintf(stderr, "mDNS(%d) WARNING: Unable to detect interface changes (%d).\n",
+		(int)getpid(), err);
             err = mStatus_NoError;
         }
     }
@@ -1446,7 +1471,7 @@ mDNSexport int mDNSPlatformMemCmp(const void *dst, const void *src, mDNSu32 len)
 
 mDNSexport void mDNSPlatformQsort(void *base, int nel, int width, int (*compar)(const void *, const void *))
 {
-    return (qsort(base, nel, width, compar));
+    (void)qsort(base, nel, width, compar);
 }
 
 // DNSSEC stub functions

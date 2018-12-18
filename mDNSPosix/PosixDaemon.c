@@ -49,6 +49,10 @@ extern int daemon(int, int);
 #include "uds_daemon.h"
 #include "PlatformCommon.h"
 
+#ifndef MDNSD_USER
+#define	MDNSD_USER "nobody"
+#endif
+
 #define CONFIG_FILE "/etc/mdnsd.conf"
 static domainname DynDNSZone;                // Default wide-area zone for service registration
 static domainname DynDNSHostname;
@@ -118,8 +122,18 @@ mDNSlocal void ParseCmdLinArgs(int argc, char **argv)
     }
 }
 
-mDNSlocal void DumpStateLog()
+mDNSlocal void ToggleLog(void)
+{
+    mDNS_LoggingEnabled = !mDNS_LoggingEnabled;
+}
+
+mDNSlocal void ToggleLogPacket(void)
+{
+    mDNS_PacketLoggingEnabled = !mDNS_PacketLoggingEnabled;
+}
+
 // Dump a little log of what we've been up to.
+mDNSlocal void DumpStateLog()
 {
 	LogMsg("---- BEGIN STATE LOG ----");
     udsserver_info();
@@ -134,6 +148,8 @@ mDNSlocal mStatus MainLoop(mDNS *m) // Loop until we quit.
     mDNSPosixListenForSignalInEventLoop(SIGINT);
     mDNSPosixListenForSignalInEventLoop(SIGTERM);
     mDNSPosixListenForSignalInEventLoop(SIGUSR1);
+    mDNSPosixListenForSignalInEventLoop(SIGUSR2);
+    mDNSPosixListenForSignalInEventLoop(SIGINFO);
     mDNSPosixListenForSignalInEventLoop(SIGPIPE);
     mDNSPosixListenForSignalInEventLoop(SIGHUP) ;
 
@@ -160,7 +176,9 @@ mDNSlocal mStatus MainLoop(mDNS *m) // Loop until we quit.
         (void) mDNSPosixRunEventLoopOnce(m, &timeout, &signals, &gotData);
 
         if (sigismember(&signals, SIGHUP )) Reconfigure(m);
-        if (sigismember(&signals, SIGUSR1)) DumpStateLog();
+        if (sigismember(&signals, SIGINFO)) DumpStateLog();
+        if (sigismember(&signals, SIGUSR1)) ToggleLog();
+        if (sigismember(&signals, SIGUSR2)) ToggleLogPacket();
         // SIGPIPE happens when we try to write to a dead client; death should be detected soon in request_callback() and cleaned up.
         if (sigismember(&signals, SIGPIPE)) LogMsg("Received SIGPIPE - ignoring");
         if (sigismember(&signals, SIGINT) || sigismember(&signals, SIGTERM)) break;
@@ -174,7 +192,7 @@ int main(int argc, char **argv)
 
     ParseCmdLinArgs(argc, argv);
 
-    LogMsg("%s starting", mDNSResponderVersionString);
+    LogInfo("%s starting", mDNSResponderVersionString);
 
     err = mDNS_Init(&mDNSStorage, &PlatformStorage, gRRCache, RR_CACHE_SIZE, mDNS_Init_AdvertiseLocalAddresses,
                     mDNS_StatusCallback, mDNS_Init_NoInitCallbackContext);
@@ -187,17 +205,24 @@ int main(int argc, char **argv)
     // Now that we're finished with anything privileged, switch over to running as "nobody"
     if (mStatus_NoError == err)
     {
-        const struct passwd *pw = getpwnam("nobody");
+        const struct passwd *pw = getpwnam(MDNSD_USER);
         if (pw != NULL)
             setuid(pw->pw_uid);
         else
-            LogMsg("WARNING: mdnsd continuing as root because user \"nobody\" does not exist");
+#ifdef MDNSD_NOROOT
+	{
+	    LogMsg("WARNING: mdnsd exiting because user \""MDNSD_USER"\" does not exist");
+	    err = mStatus_Invalid;
+	}
+#else
+            LogMsg("WARNING: mdnsd continuing as root because user \""MDNSD_USER"\" does not exist");
+#endif
     }
 
     if (mStatus_NoError == err)
         err = MainLoop(&mDNSStorage);
 
-    LogMsg("%s stopping", mDNSResponderVersionString);
+    LogInfo("%s stopping", mDNSResponderVersionString);
 
     mDNS_Close(&mDNSStorage);
 

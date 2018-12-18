@@ -55,7 +55,11 @@
 #endif
 
 #if defined(AF_INET6) && HAVE_IPV6 && !HAVE_LINUX
+#if !HAVE_SOLARIS
 #include <net/if_var.h>
+#else
+#include <alloca.h>
+#endif /* !HAVE_SOLARIS */
 #include <netinet/in_var.h>
 // Note: netinet/in_var.h implicitly includes netinet6/in6_var.h for us
 #endif
@@ -222,6 +226,316 @@ done:
 }
 #endif // defined(AF_INET6) && HAVE_IPV6 && HAVE_LINUX
 
+#if HAVE_SOLARIS
+
+/*
+ * Converts prefix length to network mask. Assumes
+ * addr points to a zeroed out buffer and prefix <= sizeof(addr)
+ * Unlike plen_to_mask returns netmask in binary form and not
+ * in text form.
+ */
+static void plen_to_netmask(int prefix, unsigned char *addr) {
+    for (; prefix > 8; prefix -= 8)
+        *addr++ = 0xff;
+    for (; prefix > 0; prefix--)
+        *addr = (*addr >> 1) | 0x80;
+}
+
+/*
+ * This function goes through all the IP interfaces associated with a
+ * physical interface and finds the best matched one for use by mDNS.
+ * Returns NULL when none of the IP interfaces associated with a physical
+ * interface are usable. Otherwise returns the best matched interface
+ * information and a pointer to the best matched lifreq.
+ */
+struct ifi_info *
+select_src_ifi_info_solaris(int sockfd, int numifs,
+        struct lifreq *lifrlist, const char *curifname,
+        struct lifreq **best_lifr)
+{
+    struct lifreq *lifr;
+    struct lifreq lifrcopy;
+    struct ifi_info *ifi;
+    char *chptr;
+    char cmpifname[LIFNAMSIZ];
+    int i;
+    uint64_t best_lifrflags = 0;
+    uint64_t ifflags;
+
+    *best_lifr = NULL;
+
+    /*
+     * Check all logical interfaces associated with the physical
+     * interface and figure out which one works best for us.
+     */
+    for (i = numifs, lifr = lifrlist; i > 0; --i, ++lifr) {
+
+        if (strlcpy(cmpifname, lifr->lifr_name, sizeof(cmpifname)) >= sizeof(cmpifname))
+            continue; /* skip interface */
+
+        /* Strip logical interface number before checking ifname */
+        if ((chptr = strchr(cmpifname, ':')) != NULL)
+            *chptr = '\0';
+
+        /*
+         * Check ifname to see if the logical interface is associated
+         * with the physical interface we are interested in.
+         */
+        if (strcmp(cmpifname, curifname) != 0)
+            continue;
+
+        lifrcopy = *lifr;
+        if (ioctl(sockfd, SIOCGLIFFLAGS, &lifrcopy) < 0) {
+            /* interface removed */
+            if (errno == ENXIO)
+                continue;
+            return(NULL);
+        }
+        ifflags = lifrcopy.lifr_flags;
+
+        /* ignore address if not up */
+        if ((ifflags & IFF_UP) == 0)
+            continue;
+        /*
+         * Avoid address if any of the following flags are set:
+         *  IFF_NOXMIT: no packets transmitted over interface
+         *  IFF_NOLOCAL: no address
+         *  IFF_PRIVATE: is not advertised
+         */
+        if (ifflags & (IFF_NOXMIT | IFF_NOLOCAL | IFF_PRIVATE))
+            continue;
+
+       /* A DHCP client will have IFF_UP set yet the address is zero. Ignore */
+        if (lifr->lifr_addr.ss_family == AF_INET) {
+               struct sockaddr_in *sinptr;
+
+               sinptr = (struct sockaddr_in *) &lifr->lifr_addr;
+               if (sinptr->sin_addr.s_addr == INADDR_ANY)
+                       continue;
+       }
+
+        if (*best_lifr != NULL) {
+            /*
+             * Check if we found a better interface by checking
+             * the flags. If flags are identical we prefer
+             * the new found interface.
+             */
+            uint64_t diff_flags = best_lifrflags ^ ifflags;
+
+            /* If interface has a different set of flags */
+            if (diff_flags != 0) {
+                /* Check flags in increasing order of ones we prefer */
+
+                /* Address temporary? */
+                if ((diff_flags & IFF_TEMPORARY) &&
+                    (ifflags & IFF_TEMPORARY))
+                    continue;
+                /* Deprecated address? */
+                if ((diff_flags & IFF_DEPRECATED) &&
+                    (ifflags & IFF_DEPRECATED))
+                    continue;
+                /* Last best-matched interface address has preferred? */
+                if ((diff_flags & IFF_PREFERRED) &&
+                    ((ifflags & IFF_PREFERRED) == 0))
+                    continue;
+            }
+        }
+
+        /* Set best match interface & flags */
+        *best_lifr = lifr;
+        best_lifrflags = ifflags;
+    }
+
+    if (*best_lifr == NULL)
+        return(NULL);
+
+    /* Found a match: return the interface information */
+    ifi = calloc(1, sizeof(struct ifi_info));
+    if (ifi == NULL)
+        return(NULL);
+
+    ifi->ifi_flags = best_lifrflags;
+    ifi->ifi_index = if_nametoindex((*best_lifr)->lifr_name);
+    if (strlcpy(ifi->ifi_name, (*best_lifr)->lifr_name, sizeof(ifi->ifi_name)) >= sizeof(ifi->ifi_name)) {
+        free(ifi);
+        return(NULL);
+    }
+    return(ifi);
+}
+
+/*
+ * Returns a list of IP interface information on Solaris. The function
+ * returns all IP interfaces on the system with IPv4 address assigned
+ * when passed AF_INET and returns IP interfaces with IPv6 address assigned
+ * when AF_INET6 is passed.
+ */
+struct ifi_info *get_ifi_info_solaris(int family)
+{
+    struct ifi_info     *ifi, *ifihead, **ifipnext;
+    int   sockfd;
+    int  len;
+    char  *buf;
+    char *cptr;
+    char  ifname[LIFNAMSIZ], cmpifname[LIFNAMSIZ];
+    struct sockaddr_in *sinptr;
+    struct lifnum lifn;
+    struct lifconf lifc;
+    struct lifreq *lifrp, *best_lifr;
+    struct lifreq lifrcopy;
+    int numifs, nlifr, n;
+#if defined(AF_INET6) && HAVE_IPV6
+    struct sockaddr_in6 *sinptr6;
+#endif
+
+    ifihead = NULL;
+
+    sockfd = socket(family, SOCK_DGRAM, 0);
+    if (sockfd < 0)
+        goto gotError;
+
+again:
+    lifn.lifn_family = family;
+    lifn.lifn_flags = 0;
+    if (ioctl(sockfd, SIOCGLIFNUM, &lifn) < 0)
+        goto gotError;
+    /*
+     * Pad interface count to detect & retrieve any
+     * additional interfaces between IFNUM & IFCONF calls.
+     */
+    lifn.lifn_count += 4;
+    numifs = lifn.lifn_count;
+    len = numifs * sizeof (struct lifreq);
+    buf = alloca(len);
+
+    lifc.lifc_family = family;
+    lifc.lifc_len = len;
+    lifc.lifc_buf = buf;
+    lifc.lifc_flags = 0;
+
+    if (ioctl(sockfd, SIOCGLIFCONF, &lifc) < 0)
+        goto gotError;
+
+    nlifr = lifc.lifc_len / sizeof(struct lifreq);
+    if (nlifr >= numifs)
+        goto again;
+
+    lifrp = lifc.lifc_req;
+    ifipnext = &ifihead;
+
+    for (n = nlifr; n > 0; n--, lifrp++) {
+
+        if (lifrp->lifr_addr.ss_family != family)
+            continue;
+
+        /*
+         * See if we have already processed the interface
+         * by checking the interface names.
+         */
+        if (strlcpy(ifname, lifrp->lifr_name, sizeof(ifname)) >= sizeof(ifname))
+            goto gotError;
+        if ((cptr = strchr(ifname, ':')) != NULL)
+            *cptr = '\0';
+
+        /*
+         * If any of the interfaces found so far share the physical
+         * interface name then we have already processed the interface.
+         */
+        for (ifi = ifihead; ifi != NULL; ifi = ifi->ifi_next) {
+
+            /* Retrieve physical interface name */
+            (void) strlcpy(cmpifname, ifi->ifi_name, sizeof(cmpifname));
+
+            /* Strip logical interface number before checking ifname */
+            if ((cptr = strchr(cmpifname, ':')) != NULL)
+                *cptr = '\0';
+
+            if (strcmp(cmpifname, ifname) == 0)
+                break;
+        }
+        if (ifi != NULL)
+            continue; /* already processed */
+
+        /*
+         * New interface, find the one with the preferred source
+         * address for our use in Multicast DNS.
+         */
+        if ((ifi = select_src_ifi_info_solaris(sockfd, nlifr,
+            lifc.lifc_req, ifname, &best_lifr)) == NULL)
+            continue;
+
+        assert(best_lifr != NULL);
+        assert((best_lifr->lifr_addr.ss_family == AF_INET6) ||
+               (best_lifr->lifr_addr.ss_family == AF_INET));
+
+        switch (best_lifr->lifr_addr.ss_family) {
+
+#if defined(AF_INET6) && HAVE_IPV6
+        case AF_INET6:
+            sinptr6 = (struct sockaddr_in6 *) &best_lifr->lifr_addr;
+            ifi->ifi_addr = malloc(sizeof(struct sockaddr_in6));
+            if (ifi->ifi_addr == NULL)
+                goto gotError;
+            memcpy(ifi->ifi_addr, sinptr6, sizeof(struct sockaddr_in6));
+
+            ifi->ifi_netmask = calloc(1, sizeof(struct sockaddr_in6));
+            if (ifi->ifi_netmask == NULL)
+                goto gotError;
+            sinptr6 = (struct sockaddr_in6 *)(ifi->ifi_netmask);
+            sinptr6->sin6_family = AF_INET6;
+            plen_to_netmask(best_lifr->lifr_addrlen,
+                    (unsigned char *) &(sinptr6->sin6_addr));
+            break;
+#endif
+
+        case AF_INET:
+            sinptr = (struct sockaddr_in *) &best_lifr->lifr_addr;
+            ifi->ifi_addr = malloc(sizeof(struct sockaddr_in));
+            if (ifi->ifi_addr == NULL)
+                goto gotError;
+
+            memcpy(ifi->ifi_addr, sinptr, sizeof(struct sockaddr_in));
+
+            lifrcopy = *best_lifr;
+            if (ioctl(sockfd, SIOCGLIFNETMASK, &lifrcopy) < 0) {
+                /* interface removed */
+                if (errno == ENXIO) {
+                    free(ifi->ifi_addr);
+                    free(ifi);
+                    continue;
+                }
+                goto gotError;
+            }
+
+            ifi->ifi_netmask = malloc(sizeof(struct sockaddr_in));
+            if (ifi->ifi_netmask == NULL)
+                goto gotError;
+            sinptr = (struct sockaddr_in *) &lifrcopy.lifr_addr;
+            sinptr->sin_family = AF_INET;
+            memcpy(ifi->ifi_netmask, sinptr, sizeof(struct sockaddr_in));
+            break;
+
+        default:
+            /* never reached */
+            break;
+        }
+
+        *ifipnext = ifi;            /* prev points to this new one */
+        ifipnext = &ifi->ifi_next;  /* pointer to next one goes here */
+    }
+
+    (void) close(sockfd);
+    return(ifihead);    /* pointer to first structure in linked list */
+
+gotError:
+    if (sockfd != -1)
+        (void) close(sockfd);
+    if (ifihead != NULL)
+        free_ifi_info(ifihead);
+    return(NULL);
+}
+
+#endif /* HAVE_SOLARIS */
+
 struct ifi_info *get_ifi_info(int family, int doaliases)
 {
     int junk;
@@ -241,6 +555,8 @@ struct ifi_info *get_ifi_info(int family, int doaliases)
 
 #if defined(AF_INET6) && HAVE_IPV6 && HAVE_LINUX
     if (family == AF_INET6) return get_ifi_info_linuxv6(doaliases);
+#elif HAVE_SOLARIS
+    return get_ifi_info_solaris(family);
 #endif
 
     sockfd = -1;
@@ -529,11 +845,12 @@ recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
     union {
         struct cmsghdr cm;
         char control[1024];
+	pad64_t align8; /* ensure structure is 8-byte aligned on sparc */
     } control_un;
 
     *ttl = 255;         // If kernel fails to provide TTL data then assume the TTL was 255 as it should be
 
-    msg.msg_control = control_un.control;
+    msg.msg_control = (void *) control_un.control;
     msg.msg_controllen = sizeof(control_un.control);
     msg.msg_flags = 0;
 #else
@@ -622,7 +939,11 @@ recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
             int nameLen = (sdl->sdl_nlen < IFI_NAME - 1) ? sdl->sdl_nlen : (IFI_NAME - 1);
             strncpy(pktp->ipi_ifname, sdl->sdl_data, nameLen);
 #endif
-            pktp->ipi_ifindex = sdl->sdl_index;
+	    /*
+	     * the is memcpy used for sparc? no idea;)
+	     * pktp->ipi_ifindex = sdl->sdl_index;
+	     */
+	    (void) memcpy(&pktp->ipi_ifindex, CMSG_DATA(cmptr), sizeof(uint_t));
 #ifdef HAVE_BROKEN_RECVIF_NAME
             if (sdl->sdl_index == 0) {
                 pktp->ipi_ifindex = *(uint_t*)sdl;
@@ -649,7 +970,7 @@ recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
 
 #if defined(IPV6_PKTINFO) && HAVE_IPV6
         if (cmptr->cmsg_level == IPPROTO_IPV6 &&
-            cmptr->cmsg_type  == IPV6_2292_PKTINFO) {
+            cmptr->cmsg_type  == IPV6_PKTINFO) {
             struct sockaddr_in6 *sin6 = (struct sockaddr_in6*)&pktp->ipi_addr;
             struct in6_pktinfo *ip6_info = (struct in6_pktinfo*)CMSG_DATA(cmptr);
 
@@ -668,7 +989,7 @@ recvfrom_flags(int fd, void *ptr, size_t nbytes, int *flagsp,
 
 #if defined(IPV6_HOPLIMIT) && HAVE_IPV6
         if (cmptr->cmsg_level == IPPROTO_IPV6 &&
-            cmptr->cmsg_type == IPV6_2292_HOPLIMIT) {
+            cmptr->cmsg_type == IPV6_HOPLIMIT) {
             *ttl = *(int*)CMSG_DATA(cmptr);
             continue;
         }

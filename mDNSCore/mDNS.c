@@ -2178,7 +2178,7 @@ mDNSexport void CompleteDeregistration(mDNS *const m, AuthRecord *rr)
     rr->resrec.RecordType = kDNSRecordTypeShared;
     rr->RequireGoodbye    = mDNSfalse;
     rr->WakeUp.HMAC       = zeroEthAddr;
-    if (rr->AnsweredLocalQ) { AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, mDNSfalse); rr->AnsweredLocalQ = mDNSfalse; }
+    if (rr->AnsweredLocalQ) { AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, QC_rmv); rr->AnsweredLocalQ = mDNSfalse; }
     mDNS_Deregister_internal(m, rr, mDNS_Dereg_normal);     // Don't touch rr after this
 }
 
@@ -2366,7 +2366,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
     // *ptr++ = tpa->b[0xF];
 
     // 0x06 Source address (Note: Since we don't currently set the BIOCSHDRCMPLT option, BPF will fill in the real interface address for us)
-    for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+    for (i=0; i<6; i++)
+	if (tha)
+	    *ptr++ = tha->b[i];
+	else
+	    *ptr++ = intf->MAC.b[i];
 
     // 0x0C IPv6 Ethertype (0x86DD)
     *ptr++ = 0x86; *ptr++ = 0xDD;
@@ -2403,7 +2407,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
         {
             *ptr++ = NDP_SrcLL; // Option Type 1 == Source Link-layer Address
             *ptr++ = 0x01;      // Option length 1 (in units of 8 octets)
-            for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+            for (i=0; i<6; i++)
+		if (tha)
+		    *ptr++ = tha->b[i];
+		else
+		    *ptr++ = intf->MAC.b[i];
         }
     }
     else            // Neighbor Advertisement. The NDP "target" is the address we're giving information about.
@@ -2413,7 +2421,11 @@ mDNSlocal void SendNDP(mDNS *const m, const mDNSu8 op, const mDNSu8 flags, const
         // 0x4E Target Link-layer Address
         *ptr++ = NDP_TgtLL; // Option Type 2 == Target Link-layer Address
         *ptr++ = 0x01;      // Option length 1 (in units of 8 octets)
-        for (i=0; i<6; i++) *ptr++ = (tha ? *tha : intf->MAC).b[i];
+        for (i=0; i<6; i++)
+	    if (tha)
+		*ptr++ = tha->b[i];
+	    else
+		*ptr++ = intf->MAC.b[i];
     }
 
     // 0x4E or 0x56 Total NDP Packet length 78 or 86 bytes
@@ -4379,6 +4391,7 @@ mDNSlocal void CacheRecordAdd(mDNS *const m, CacheRecord *rr)
     {
         if (ResourceRecordAnswersQuestion(&rr->resrec, q))
         {
+	    mDNSIPPort zp = zeroIPPort;
             // If this question is one that's actively sending queries, and it's received ten answers within one
             // second of sending the last query packet, then that indicates some radical network topology change,
             // so reset its exponential backoff back to the start. We must be at least at the eight-second interval
@@ -4401,7 +4414,7 @@ mDNSlocal void CacheRecordAdd(mDNS *const m, CacheRecord *rr)
             verbosedebugf("CacheRecordAdd %p %##s (%s) %lu %#a:%d question %p", rr, rr->resrec.name->c,
                           DNSTypeName(rr->resrec.rrtype), rr->resrec.rroriginalttl, rr->resrec.rDNSServer ?
                           &rr->resrec.rDNSServer->addr : mDNSNULL, mDNSVal16(rr->resrec.rDNSServer ?
-                                                                             rr->resrec.rDNSServer->port : zeroIPPort), q);
+                                                                             rr->resrec.rDNSServer->port : zp), q);
             q->CurrentAnswers++;
 
             q->unansweredQueries = 0;
@@ -4499,10 +4512,12 @@ mDNSlocal void CacheRecordRmv(mDNS *const m, CacheRecord *rr)
             q->FlappingInterface1 = mDNSNULL;
             q->FlappingInterface2 = mDNSNULL;
 
-            if (q->CurrentAnswers == 0)
+            if (q->CurrentAnswers == 0) {
+		mDNSIPPort zp = zeroIPPort;
                 LogMsg("CacheRecordRmv ERROR!!: How can CurrentAnswers already be zero for %p %##s (%s) DNSServer %#a:%d",
                        q, q->qname.c, DNSTypeName(q->qtype), q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL,
-                       mDNSVal16(q->qDNSServer ? q->qDNSServer->port : zeroIPPort));
+                       mDNSVal16(q->qDNSServer ? q->qDNSServer->port : zp));
+	    }
             else
             {
                 q->CurrentAnswers--;
@@ -4778,7 +4793,7 @@ mDNSlocal mDNSBool AnswerQuestionWithLORecord(mDNS *const m, DNSQuestion *q, mDN
                         m->CurrentRecord = mDNSNULL;
                         return mDNStrue;
                     }
-                    AnswerLocalQuestionWithLocalAuthRecord(m, rr, mDNStrue);
+                    AnswerLocalQuestionWithLocalAuthRecord(m, rr, QC_add);
                     if (m->CurrentQuestion != q)
                         break;     // If callback deleted q, then we're finished here
                 }
@@ -5287,7 +5302,7 @@ mDNSlocal void CheckRmvEventsForLocalRecords(mDNS *const m)
         {
             debugf("CheckRmvEventsForLocalRecords: Generating local RMV events for %s", ARDisplayString(m, rr));
             rr->resrec.RecordType = kDNSRecordTypeShared;
-            AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, mDNSfalse);
+            AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, QC_rmv);
             if (m->CurrentRecord == rr) // If rr still exists in list, restore its state now
             {
                 rr->resrec.RecordType = kDNSRecordTypeDeregistering;
@@ -5498,7 +5513,7 @@ mDNSexport mDNSs32 mDNS_Execute(mDNS *const m)
             if (LocalRecordReady(rr))
             {
                 debugf("mDNS_Execute: Delivering Add event with LocalAuthRecord %s", ARDisplayString(m, rr));
-                AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, mDNStrue);
+                AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, QC_add);
             }
             else if (!rr->next)
             {
@@ -5555,7 +5570,7 @@ mDNSexport mDNSs32 mDNS_Execute(mDNS *const m)
                         if (LocalRecordReady(rr))
                         {
                             debugf("mDNS_Execute: Delivering Add event with LocalAuthRecord %s", ARDisplayString(m, rr));
-                            AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, mDNStrue);
+                            AnswerAllLocalQuestionsWithLocalAuthRecord(m, rr, QC_add);
                         }
                         else LogMsg("mDNS_Execute: LocalOnlyRecord %s not ready", ARDisplayString(m, rr));
                     }
@@ -8125,7 +8140,10 @@ mDNSlocal DNSQuestion *ExpectingUnicastResponseForRecord(mDNS *const m,
                     mDNSIPPort srcp;
                     if (!tcp)
                     {
-                        srcp = q->LocalSocket ? q->LocalSocket->port : zeroIPPort;
+			if (q->LocalSocket)
+                            srcp = q->LocalSocket->port;
+			else
+                            srcp = zeroIPPort;
                     }
                     else
                     {
@@ -9854,7 +9872,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
     int     i;
     mDNSs8  hval   = 0;
     int     colons = 0;
-    mDNSu8  val    = 0;
+    mDNSu16  val    = 0; /* need to use 16 bit int to detect overflow */
 
     for (i = 0; ptr < limit && *ptr != ' ' && i < 17; i++, ptr++)
     {
@@ -9871,7 +9889,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
                 LogMsg("GetValueForMACAddr: Address malformed colons %d val %d", colons, val);
                 return mDNSNULL;
             }
-            eth->b[colons] = val;
+            eth->b[colons] = (mDNSs8)val;
             colons++;
             val = 0;
         }
@@ -9881,7 +9899,7 @@ mDNSlocal mDNSu8 *GetValueForMACAddr(mDNSu8 *ptr, mDNSu8 *limit, mDNSEthAddr *et
         LogMsg("GetValueForMACAddr: Address malformed colons %d", colons);
         return mDNSNULL;
     }
-    eth->b[colons] = val;
+    eth->b[colons] = (mDNSs8)val;
     return ptr;
 }
 
@@ -11798,7 +11816,7 @@ mDNSlocal void InitDNSConfig(mDNS *const m, DNSQuestion *const question)
         LogDebug("InitDNSConfig: question %p %##s (%s) Timeout %d, DNS Server %#a:%d",
                  question, question->qname.c, DNSTypeName(question->qtype), timeout,
                  question->qDNSServer ? &question->qDNSServer->addr : mDNSNULL,
-                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zeroIPPort));
+                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zp));
     }
     else if (question->TimeoutQuestion && !question->StopTime)
     {
@@ -12024,6 +12042,7 @@ mDNSlocal void FinalizeUnicastQuestion(mDNS *const m, DNSQuestion *question)
     // Ensure DNS related info of duplicate question is same as the orig question
     if (question->DuplicateOf)
     {
+	mDNSIPPort zp = zeroIPPort;
         question->validDNSServers = question->DuplicateOf->validDNSServers;
         // If current(dup) question has DNS Server assigned but the original question has no DNS Server assigned to it,
         // then we log a line as it could indicate an issue
@@ -12039,7 +12058,7 @@ mDNSlocal void FinalizeUnicastQuestion(mDNS *const m, DNSQuestion *question)
         LogInfo("FinalizeUnicastQuestion: Duplicate question %p (%p) %##s (%s), DNS Server %#a:%d",
                  question, question->DuplicateOf, question->qname.c, DNSTypeName(question->qtype),
                  question->qDNSServer ? &question->qDNSServer->addr : mDNSNULL,
-                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zeroIPPort));
+                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zp));
     }
 
     ActivateUnicastQuery(m, question, mDNSfalse);
@@ -12444,7 +12463,7 @@ mDNSexport mStatus mDNS_StopQueryWithRemoves(mDNS *const m, DNSQuestion *const q
             {
                 // Don't use mDNS_DropLockBeforeCallback() here, since we don't allow API calls
                 if (question->QuestionCallback)
-                    question->QuestionCallback(m, question, &rr->resrec, mDNSfalse);
+                    question->QuestionCallback(m, question, &rr->resrec, QC_rmv);
             }
     }
     mDNS_Unlock(m);
@@ -12985,7 +13004,7 @@ mDNSexport void mDNS_DeactivateNetWake_internal(mDNS *const m, NetworkInterfaceI
         if (m->SPSBrowseCallback)
         {
             mDNS_DropLockBeforeCallback();      // Allow client to legally make mDNS API calls from the callback
-            m->SPSBrowseCallback(m, &set->NetWakeBrowse, mDNSNULL, mDNSfalse);
+            m->SPSBrowseCallback(m, &set->NetWakeBrowse, mDNSNULL, QC_rmv);
             mDNS_ReclaimLockAfterCallback();    // Decrement mDNS_reentrancy to block mDNS API calls again
         }
 
@@ -14980,10 +14999,21 @@ mDNSexport mStatus uDNS_SetupDNSConfig(mDNS *const m)
             if (t != s)
             {
                 mDNSBool old, new;
+		mDNSIPPort tport, sport;
+
+		if (t)
+			tport = t->port;
+		else
+			tport = zeroIPPort;
+
+		if (s)
+			sport = s->port;
+		else
+			sport = zeroIPPort;
                 // If DNS Server for this question has changed, reactivate it
                 LogInfo("uDNS_SetupDNSConfig: Updating DNS Server from %#a:%d (%##s) to %#a:%d (%##s) for question %##s (%s) (scope:%p)",
-                        t ? &t->addr : mDNSNULL, mDNSVal16(t ? t->port : zeroIPPort), t ? t->domain.c : (mDNSu8*)"",
-                        s ? &s->addr : mDNSNULL, mDNSVal16(s ? s->port : zeroIPPort), s ? s->domain.c : (mDNSu8*)"",
+                        t ? &t->addr : mDNSNULL, mDNSVal16(tport), t ? t->domain.c : (mDNSu8*)"",
+                        s ? &s->addr : mDNSNULL, mDNSVal16(sport), s ? s->domain.c : (mDNSu8*)"",
                         q->qname.c, DNSTypeName(q->qtype), q->InterfaceID);
 
                 old = q->SuppressQuery;
@@ -15032,8 +15062,9 @@ mDNSexport mStatus uDNS_SetupDNSConfig(mDNS *const m)
             }
             else
             {
+		mDNSIPPort zp = zeroIPPort;
                 debugf("uDNS_SetupDNSConfig: Not Updating DNS server question %p %##s (%s) DNS server %#a:%d %p %d",
-                       q, q->qname.c, DNSTypeName(q->qtype), t ? &t->addr : mDNSNULL, mDNSVal16(t ? t->port : zeroIPPort), q->DuplicateOf, q->SuppressUnusable);
+                       q, q->qname.c, DNSTypeName(q->qtype), t ? &t->addr : mDNSNULL, mDNSVal16(t ? t->port : zp), q->DuplicateOf, q->SuppressUnusable);
                 for (qptr = q->next ; qptr; qptr = qptr->next)
                     if (qptr->DuplicateOf == q) { qptr->validDNSServers = q->validDNSServers; qptr->qDNSServer = q->qDNSServer; }
             }

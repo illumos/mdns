@@ -1014,6 +1014,7 @@ mDNSlocal void set_peer_pid(request_state *request)
 {
     pid_t           p    = (pid_t) -1;
     socklen_t       len  = sizeof(p);
+
     request->pid_name[0] = '\0';
     request->process_id  = -1;
 #ifdef LOCAL_PEEREPID
@@ -3627,7 +3628,7 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
             LogMsg("handle_queryrecord_request: interfaceIndex %d is currently inactive requested by client[%d][%s]",
                     interfaceIndex, request->process_id, request->pid_name);
         // If it's one of the specially defined inteface index values, just return an error.
-        // Also, caller should return an error immediately if lo0 (index 1) is not configured 
+        // Also, caller should return an error immediately if lo0 (index 1) is not configured
         // into the current active interfaces.  See background in Radar 21967160.
         if (PreDefinedInterfaceIndex(interfaceIndex) || interfaceIndex == 1)
         {
@@ -5093,7 +5094,7 @@ mDNSexport int udsserver_init(dnssd_sock_t skts[], mDNSu32 count)
         FILE *fp = fopen(PID_FILE, "w");
         if (fp != NULL)
         {
-            fprintf(fp, "%d\n", getpid());
+            fprintf(fp, "%d\n", (int)getpid());
             fclose(fp);
         }
     }
