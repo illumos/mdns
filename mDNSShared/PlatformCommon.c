@@ -25,7 +25,7 @@
 
 #if APPLE_OSX_mDNSResponder
 #include <os/log.h>
-#endif 
+#endif
 
 #include "mDNSEmbeddedAPI.h"    // Defines the interface provided to the client layer above
 #include "DNSCommon.h"

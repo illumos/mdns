@@ -1851,7 +1851,7 @@ mDNSlocal mStatus handle_regservice_request(request_state *request)
     mDNSu32 interfaceIndex = get_uint32(&request->msgptr, request->msgend);
     mDNSInterfaceID InterfaceID;
 
-    // Map kDNSServiceInterfaceIndexP2P to kDNSServiceInterfaceIndexAny with the 
+    // Map kDNSServiceInterfaceIndexP2P to kDNSServiceInterfaceIndexAny with the
     // kDNSServiceFlagsIncludeP2P flag set.
     if (interfaceIndex == kDNSServiceInterfaceIndexP2P)
     {
@@ -1862,7 +1862,7 @@ mDNSlocal mStatus handle_regservice_request(request_state *request)
 
     InterfaceID = mDNSPlatformInterfaceIDfromInterfaceIndex(&mDNSStorage, interfaceIndex);
 
-    // The registration is scoped to a specific interface index, but the 
+    // The registration is scoped to a specific interface index, but the
     // interface is not currently in our list.
     if (interfaceIndex && !InterfaceID)
     {
@@ -2015,7 +2015,7 @@ mDNSlocal mStatus handle_regservice_request(request_state *request)
     request->terminate = regservice_termination_callback;
 
     err = register_service_instance(request, &d);
-    
+
 #if TARGET_OS_EMBEDDED
     ++curr_num_regservices;
     if (curr_num_regservices > max_num_regservices)
@@ -2104,7 +2104,7 @@ mDNSlocal void SetQuestionPolicy(DNSQuestion *q, request_state *req)
     q->euid = req->uid;
     // The policy is either based on pid or UUID. Pass a zero pid
     // to the "core" if the UUID is valid. If we always pass the pid,
-    // then the "core" needs to determine whether the uuid is valid 
+    // then the "core" needs to determine whether the uuid is valid
     // by examining all the 16 bytes at the time of the policy
     // check and also when setting the delegate socket option. Also, it
     // requires that we zero out the uuid wherever the question is
@@ -2518,7 +2518,7 @@ mDNSlocal mStatus handle_browse_request(request_state *request)
     mDNSu32 interfaceIndex = get_uint32(&request->msgptr, request->msgend);
     mDNSInterfaceID InterfaceID = mDNSPlatformInterfaceIDfromInterfaceIndex(&mDNSStorage, interfaceIndex);
 
-    // The browse is scoped to a specific interface index, but the 
+    // The browse is scoped to a specific interface index, but the
     // interface is not currently in our list.
     if (interfaceIndex && !InterfaceID)
     {
@@ -2641,7 +2641,7 @@ mDNSlocal void resolve_result_callback(mDNS *const m, DNSQuestion *question, con
         (answer->RecordType == kDNSRecordTypePacketNegative) ? kDNSServiceErr_NoSuchRecord : kDNSServiceErr_NoError;
     (void)m; // Unused
 
-    LogOperation("%3d: DNSServiceResolve(%##s) %s interface %d: %s", 
+    LogOperation("%3d: DNSServiceResolve(%##s) %s interface %d: %s",
         req->sd, question->qname.c, AddRecord ? "ADD" : "RMV",
         mDNSPlatformInterfaceIndexfromInterfaceID(m, answer->InterfaceID, mDNSfalse), RRDisplayString(m, answer));
 
@@ -2724,7 +2724,7 @@ mDNSlocal mStatus handle_resolve_request(request_state *request)
 
     InterfaceID = mDNSPlatformInterfaceIDfromInterfaceIndex(&mDNSStorage, interfaceIndex);
 
-    // The operation is scoped to a specific interface index, but the 
+    // The operation is scoped to a specific interface index, but the
     // interface is not currently in our list.
     if (interfaceIndex && !InterfaceID)
     {
@@ -2759,7 +2759,7 @@ mDNSlocal mStatus handle_resolve_request(request_state *request)
     {
         flags |= (kDNSServiceFlagsAutoTrigger | kDNSServiceFlagsIncludeAWDL);
         LogInfo("handle_resolve_request: request promoted to use kDNSServiceFlagsAutoTrigger");
-    } 
+    }
 #endif // APPLE_OSX_mDNSResponder && ENABLE_BLE_TRIGGERED_BONJOUR
 
     request->flags = flags;
@@ -3615,7 +3615,7 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
     mDNSu32 interfaceIndex = get_uint32(&request->msgptr, request->msgend);
     mDNSInterfaceID InterfaceID = mDNSPlatformInterfaceIDfromInterfaceIndex(&mDNSStorage, interfaceIndex);
 
-    // The request is scoped to a specific interface index, but the 
+    // The request is scoped to a specific interface index, but the
     // interface is not currently in our list.
     if (interfaceIndex && !InterfaceID)
     {
@@ -3623,7 +3623,7 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
             LogMsg("handle_queryrecord_request: interfaceIndex %d is currently inactive requested by client[%d][%s]",
                     interfaceIndex, request->process_id, request->pid_name);
         // If it's one of the specially defined inteface index values, just return an error.
-        // Also, caller should return an error immediately if lo0 (index 1) is not configured 
+        // Also, caller should return an error immediately if lo0 (index 1) is not configured
         // into the current active interfaces.  See background in Radar 21967160.
         if (PreDefinedInterfaceIndex(interfaceIndex) || interfaceIndex == 1)
         {
@@ -3689,7 +3689,7 @@ mDNSlocal mStatus handle_queryrecord_request(request_state *request)
     // we only deal with FQDNs. Hence, we cannot look at qname to figure out whether we should
     // append search domains or not.  So, we record that information in AppendSearchDomains.
     //
-    // We append search domains only for queries that are a single label. If overriden using command line 
+    // We append search domains only for queries that are a single label. If overriden using command line
     // argument "AlwaysAppendSearchDomains", then we do it for any query which is not fully qualified.
     // For DNSSEC questions, append search domains only if kDNSServiceFlagsValidateOptional is set.
 
@@ -3918,7 +3918,7 @@ mDNSlocal mStatus handle_reconfirm_request(request_state *request)
             "%3d: DNSServiceReconfirmRecord(%s) interface %d initiated PID[%d](%s)" :
             "%3d: DNSServiceReconfirmRecord(%s) interface %d failed PID[%d](%s) status %d",
             request->sd, RRDisplayString(&mDNSStorage, &rr->resrec),
-            mDNSPlatformInterfaceIndexfromInterfaceID(&mDNSStorage, rr->resrec.InterfaceID, mDNSfalse), 
+            mDNSPlatformInterfaceIndexfromInterfaceID(&mDNSStorage, rr->resrec.InterfaceID, mDNSfalse),
             request->process_id, request->pid_name, status);
         freeL("AuthRecord/handle_reconfirm_request", rr);
     }
@@ -4380,7 +4380,7 @@ mDNSlocal mStatus handle_addrinfo_request(request_state *request)
 
     InterfaceID = mDNSPlatformInterfaceIDfromInterfaceIndex(&mDNSStorage, interfaceIndex);
 
-    // The request is scoped to a specific interface index, but the 
+    // The request is scoped to a specific interface index, but the
     // interface is not currently in our list.
     if (interfaceIndex && !InterfaceID)
     {
@@ -4462,7 +4462,7 @@ mDNSlocal mStatus handle_addrinfo_request(request_state *request)
 
     hostnameLen = strlen(hostname);
 
-    LogOperation("%3d: DNSServiceGetAddrInfo(%X, %d, %d, %##s) START PID[%d](%s)", 
+    LogOperation("%3d: DNSServiceGetAddrInfo(%X, %d, %d, %##s) START PID[%d](%s)",
         request->sd, flags, interfaceIndex, request->u.addrinfo.protocol, d.c, request->process_id, request->pid_name);
 
     if (request->u.addrinfo.protocol & kDNSServiceProtocol_IPv6)
@@ -5848,7 +5848,7 @@ mDNSexport void udsserver_info()
 foundparent:;
         }
     }
-    
+
     LogMsgNoIdent("-------- NAT Traversals --------");
     LogMsgNoIdent("ExtAddress %.4a Retry %d Interval %d",
                   &m->ExtAddress,

@@ -277,7 +277,7 @@ extern mDNSu32 swap32(mDNSu32 x);
 #endif
 
 extern mStatus mDNSSendDNSMessage(mDNS *const m, DNSMessage *const msg, mDNSu8 *end,
-                                  mDNSInterfaceID InterfaceID, UDPSocket *src, const mDNSAddr *dst, 
+                                  mDNSInterfaceID InterfaceID, UDPSocket *src, const mDNSAddr *dst,
                                   mDNSIPPort dstport, TCPSocket *sock, DomainAuthInfo *authInfo,
                                   mDNSBool useBackgroundTrafficClass);
 

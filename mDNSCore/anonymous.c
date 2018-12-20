@@ -25,7 +25,7 @@
 
 #ifndef ANONYMOUS_DISABLED
 
-#define ANON_NSEC3_ITERATIONS        1 
+#define ANON_NSEC3_ITERATIONS        1
 
 struct AnonInfoResourceRecord_struct
 {
@@ -98,8 +98,8 @@ mDNSlocal ResourceRecord *ConstructNSEC3Record(const domainname *service, const 
     }
 
     dlen = DomainNameLength(service);
- 
-    // Allocate space for the name and RData. 
+
+    // Allocate space for the name and RData.
     rr = mDNSPlatformMemAllocate(sizeof(ResourceRecord) + dlen + sizeof(RData));
     if (!rr)
         return mDNSNULL;
@@ -236,7 +236,7 @@ mDNSexport void SetAnonData(DNSQuestion *q, ResourceRecord *rr, mDNSBool ForQues
         LogMsg("SetAnonData: question %##s(%p), rr %##s(%p), NULL", q->qname.c, q->AnonInfo, rr->name->c, rr->AnonInfo);
         return;
     }
-    
+
     debugf("SetAnonData: question %##s(%p), rr %##s(%p)", q->qname.c, q->AnonInfo, rr->name->c, rr->AnonInfo);
     if (ForQuestion)
     {
@@ -302,7 +302,7 @@ mDNSexport int AnonInfoAnswersQuestion(const ResourceRecord *const rr, const DNS
 
     // We allow anonymous questions to be answered by both normal services (without the
     // anonymous information) and anonymous services that are part of the same set. And
-    // normal questions discover normal services and all anonymous services. 
+    // normal questions discover normal services and all anonymous services.
     //
     // The three cases have been enumerated clearly even though they all behave the
     // same way.
@@ -354,7 +354,7 @@ mDNSexport int AnonInfoAnswersQuestion(const ResourceRecord *const rr, const DNS
         //
         // It is also possible that a local question is matched against the local AuthRecord
         // as that is also the case for which the AnonData would be non-NULL for both.
-        // We match questions against AuthRecords (rather than the cache) for LocalOnly case and 
+        // We match questions against AuthRecords (rather than the cache) for LocalOnly case and
         // to see whether a .local query should be suppressed or not. The latter never happens
         // because PTR queries are never suppressed.
 
@@ -381,7 +381,7 @@ mDNSexport int AnonInfoAnswersQuestion(const ResourceRecord *const rr, const DNS
         // If there is AnonData, then this is a local question. The
         // NSEC3 RR comes from the resource record which could be part
         // of the cache or local auth record. The cache entry could
-        // be from a remote host or created when we heard our own 
+        // be from a remote host or created when we heard our own
         // announcements. In any case, we use that to see if it matches
         // the question.
         AnonData = qai->AnonData;
@@ -447,7 +447,7 @@ mDNSlocal CacheRecord *FindMatchingNSEC3ForName(mDNS *const m, CacheRecord **nse
 {
     CacheRecord *cr;
     CacheRecord **prev = nsec3;
-    
+
     (void) m;
 
     for (cr = *nsec3; cr; cr = cr->next)
