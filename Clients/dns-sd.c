@@ -381,7 +381,7 @@ static char *DNSTypeName(unsigned short rr_type)
         case kDNSServiceType_MAILB:      return("MAILB");
         case kDNSServiceType_MAILA:      return("MAILA");
         case kDNSServiceType_ANY:        return("ANY");
-        default:            
+        default:
         {
             static char buffer[RR_TYPE_SIZE];
             snprintf(buffer, sizeof(buffer), "TYPE%d", rr_type);
@@ -1450,7 +1450,7 @@ static char *gettype(char *buffer, char *typ)
     return(typ);
 }
 
-// Do some basic tests to verify API handles > 63 byte strings gracefully with 
+// Do some basic tests to verify API handles > 63 byte strings gracefully with
 // a returned error code.
 
 #define STRING_64_BYTES "_123456789012345678901234567890123456789012345678901234567890123"
@@ -1725,8 +1725,8 @@ static int API_NULL_input_test()
 	    }
     }
 
-    // DNSServiceAddRecord(), DNSServiceUpdateRecord(), and DNSServiceRemoveRecord() verify that they 
-    // get a valid DNSServiceRef returned from DNSServiceRegister() 
+    // DNSServiceAddRecord(), DNSServiceUpdateRecord(), and DNSServiceRemoveRecord() verify that they
+    // get a valid DNSServiceRef returned from DNSServiceRegister()
     {
         DNSServiceErrorType err;
 	    Opaque16            registerPort = { { 0x12, 0x34 } };
@@ -1746,7 +1746,7 @@ static int API_NULL_input_test()
             printf("DNSServiceRegister() failed with: %d\n", err);
             return 1;
         }
-	
+
 	    // DNSServiceAddRecord()
 	    if (    (DNSServiceAddRecord(    0, &RecordRef, flags, rrtype, rdlen, rdata, ttl) == 0)
 	        ||  (DNSServiceAddRecord(sdRef,          0, flags, rrtype, rdlen, rdata, ttl) == 0)
@@ -1764,7 +1764,7 @@ static int API_NULL_input_test()
 	        printf("DNSServiceAddRecord(): with (rdlen == 0 && rdata == 0) returned kDNSServiceErr_BadParam\n");
 	        return 1;
         }
-	
+
 	    // DNSServiceUpdateRecord()
         // Note, RecordRef can be NULL per explanation with declaration in dns_sd.h
 	    if (    (DNSServiceUpdateRecord(    0, RecordRef, flags, rdlen, rdata, ttl) == 0)
@@ -1774,7 +1774,7 @@ static int API_NULL_input_test()
 	        printf("DNSServiceUpdateRecord(): expected error return\n");
 	        return 1;
 	    }
-	
+
         // (rdlen == 0 && rdata == 0) should indicate a TXT with rdata containing only a 0 length byte.
         if (DNSServiceUpdateRecord(sdRef, RecordRef, flags, 0, 0, ttl) == kDNSServiceErr_BadParam)
         {
@@ -1803,7 +1803,7 @@ static int API_NULL_input_test()
 	    uint16_t            rrclass = kDNSServiceClass_IN;
 	    uint16_t            rdlen = 1;
 	    const void          *rdata = "\0";
-	
+
 	    if (    (DNSServiceReconfirmRecord(flags, interfaceIndex,        0, rrtype, rrclass, rdlen, rdata) == 0)
             ||  (DNSServiceReconfirmRecord(flags, interfaceIndex, fullname, rrtype, rrclass, rdlen,     0) == 0)
            )
@@ -1878,7 +1878,7 @@ int main(int argc, char **argv)
 	        argv++;
 	        return API_input_range_test();
 	    }
-	
+
 	    if (argc > 1 && !strcmp(argv[1], "-lo"))
 	    {
 	        argc--;
@@ -1886,14 +1886,14 @@ int main(int argc, char **argv)
 	        opinterface = kDNSServiceInterfaceIndexLocalOnly;
 	        printf("Using LocalOnly\n");
 	    }
-	
+
 	    if (argc > 1 && (!strcasecmp(argv[1], "-p2p")))
 	    {
 	        argc--;
 	        argv++;
 	        opinterface = kDNSServiceInterfaceIndexP2P;
 	    }
-	
+
 	    if (argc > 1 && (!strcasecmp(argv[1], "-ble")))
 	    {
 	        argc--;
@@ -1924,7 +1924,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsForceMulticast;
 	        printf("Setting kDNSServiceFlagsForceMulticast flag for this request\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-includeAWDL"))
 	    {
 	        argc--;
@@ -1948,7 +1948,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsBackgroundTrafficClass;
 	        printf("Setting kDNSServiceFlagsBackgroundTrafficClass\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-t1"))
 	    {
 	        argc--;
@@ -1956,7 +1956,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsThresholdOne;
 	        printf("Setting kDNSServiceFlagsThresholdOne\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-tFinder"))
 	    {
 	        argc--;
@@ -1964,7 +1964,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsThresholdFinder;
 	        printf("Setting kDNSServiceFlagsThresholdFinder\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-wo"))
 	    {
 	        argc--;
@@ -1972,7 +1972,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsWakeOnlyService;
 	        printf("Setting kDNSServiceFlagsWakeOnlyService\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-ku"))
 	    {
 	        argc--;
@@ -1980,7 +1980,7 @@ int main(int argc, char **argv)
 	        flags |= kDNSServiceFlagsKnownUnique;
 	        printf("Setting kDNSServiceFlagsKnownUnique\n");
 	    }
-	
+
 	    if (argc > 1 && !strcasecmp(argv[1], "-unicastResponse"))
 	    {
 	        argc--;

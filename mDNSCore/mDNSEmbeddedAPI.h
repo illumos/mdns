@@ -304,7 +304,7 @@ typedef mDNSOpaque48 mDNSEthAddr;       // An Ethernet address is a six-byte opa
 #define bit_set_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] |= (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_clr_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] &= ~(1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_get_opaque64(op64, index) (op64.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] & (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
-    
+
 // Bit operations for opaque 128 bit quantity. Uses the 32 bit quantity(l[4]) to set and clear bits
 #define bit_set_opaque128(op128, index) (op128.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] |= (1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
 #define bit_clr_opaque128(op128, index) (op128.l[((index))/(sizeof(mDNSu32) * mDNSNBBY)] &= ~(1 << ((index) % (sizeof(mDNSu32) * mDNSNBBY))))
@@ -910,9 +910,9 @@ typedef enum
 
 typedef enum
 {
-    platform_OSX = 1,   // OSX Platform 
-    platform_iOS,       // iOS Platform 
-    platform_Atv,       // Atv Platform 
+    platform_OSX = 1,   // OSX Platform
+    platform_iOS,       // iOS Platform
+    platform_Atv,       // Atv Platform
     platform_NonApple   // Non-Apple (Windows, POSIX) Platform
 } Platform_t;
 
@@ -923,7 +923,7 @@ typedef enum
 #define kDNSOpt_Lease 2
 #define kDNSOpt_NSID  3
 #define kDNSOpt_Owner 4
-#define kDNSOpt_Trace 65001  // 65001-65534 Reserved for Local/Experimental Use 
+#define kDNSOpt_Trace 65001  // 65001-65534 Reserved for Local/Experimental Use
 
 typedef struct
 {
@@ -1618,7 +1618,7 @@ struct AuthRecord_struct
 #define Question_uDNS(Q)   ((Q)->InterfaceID == mDNSInterface_Unicast || (Q)->ProxyQuestion || \
                             ((Q)->InterfaceID != mDNSInterface_LocalOnly && (Q)->InterfaceID != mDNSInterface_P2P && (Q)->InterfaceID != mDNSInterface_BLE && !(Q)->ForceMCast && !IsLocalDomain(&(Q)->qname)))
 
-// AuthRecordLocalOnly records are registered using mDNSInterface_LocalOnly and 
+// AuthRecordLocalOnly records are registered using mDNSInterface_LocalOnly and
 // AuthRecordP2P records are created by D2DServiceFound events.  Both record types are kept on the same list.
 #define RRLocalOnly(rr) ((rr)->ARType == AuthRecordLocalOnly || (rr)->ARType == AuthRecordP2P)
 
@@ -1750,7 +1750,7 @@ struct ServiceRecordSet_struct
     mDNSu32 NumSubTypes;
     AuthRecord          *SubTypes;
     const mDNSu8        *AnonData;
-    mDNSu32             flags;      // saved for subsequent calls to mDNS_RegisterService() if records 
+    mDNSu32             flags;      // saved for subsequent calls to mDNS_RegisterService() if records
                                     // need to be re-registered.
     AuthRecord RR_ADV;              // e.g. _services._dns-sd._udp.local. PTR _printer._tcp.local.
     AuthRecord RR_PTR;              // e.g. _printer._tcp.local.        PTR Name._printer._tcp.local.
@@ -1891,7 +1891,7 @@ typedef enum { DNSSECValNotRequired = 0, DNSSECValRequired, DNSSECValInProgress,
 
 // ValidationRequired can be set to the following values:
 //
-// SECURE validation is set to determine whether something is secure or bogus 
+// SECURE validation is set to determine whether something is secure or bogus
 // INSECURE validation is set internally by dnssec code to indicate that it is currently proving something
 // is insecure
 #define DNSSEC_VALIDATION_NONE              0x00
@@ -1914,7 +1914,7 @@ typedef enum { DNSSECValNotRequired = 0, DNSSECValRequired, DNSSECValInProgress,
                                          (rr)->RecordType != kDNSRecordTypePacketNegative && \
                                          (rr)->rrtype == kDNSType_CNAME)
 
-// RFC 4122 defines it to be 16 bytes 
+// RFC 4122 defines it to be 16 bytes
 #define UUID_SIZE       16
 
 #define AWD_METRICS (USE_AWD && TARGET_OS_IOS)
@@ -1983,7 +1983,7 @@ struct DNSQuestion_struct
     DupSuppressInfo DupSuppress[DupSuppressInfoSize];
     mDNSInterfaceID SendQNow;               // The interface this query is being sent on right now
     mDNSBool SendOnAll;                     // Set if we're sending this question on all active interfaces
-    mDNSBool CachedAnswerNeedsUpdate;       // See SendQueries().  Set if we're sending this question 
+    mDNSBool CachedAnswerNeedsUpdate;       // See SendQueries().  Set if we're sending this question
                                             // because a cached answer needs to be refreshed.
     mDNSu32 RequestUnicast;                 // Non-zero if we want to send query with kDNSQClass_UnicastResponse bit set
     mDNSs32 LastQTxTime;                    // Last time this Q was sent on one (but not necessarily all) interfaces
@@ -2035,7 +2035,7 @@ struct DNSQuestion_struct
     DNSPush_State dnsPushState;             // The state of the DNS push notification negotiation
     mDNSAddr      dnsPushServerAddr;        // Address of the system acting as the DNS Push Server
     mDNSIPPort    dnsPushServerPort;        // Port on which the DNS Push Server is being advertised.
-    
+
     mDNSOpaque64 id;
 
     // DNS Proxy fields
@@ -2618,7 +2618,7 @@ extern const mDNSOpaque16 UnSubscribeFlags;
 
 extern const mDNSOpaque64 zeroOpaque64;
 extern const mDNSOpaque128 zeroOpaque128;
-    
+
 extern mDNSBool StrictUnicastOrdering;
 extern mDNSu8 NumUnicastDNSServers;
 #if APPLE_OSX_mDNSResponder

@@ -470,9 +470,9 @@ mDNSexport char *GetRRDisplayString_rdb(const ResourceRecord *const rr, const RD
         const mDNSu8 *p = (mDNSu8 *)&nsec3->salt;
         int hashLength, bitmaplen, i;
 
-        length += mDNS_snprintf(buffer+length, RemSpc, "\t%s  %d  %d ", 
+        length += mDNS_snprintf(buffer+length, RemSpc, "\t%s  %d  %d ",
                                 DNSSECDigestName(nsec3->alg), nsec3->flags, swap16(nsec3->iterations));
-        
+
         if (!nsec3->saltLength)
         {
             length += mDNS_snprintf(buffer+length, RemSpc, "-");
@@ -491,7 +491,7 @@ mDNSexport char *GetRRDisplayString_rdb(const ResourceRecord *const rr, const RD
         p += nsec3->saltLength;
         // p is pointing at hashLength
         hashLength = (int)*p++;
-        
+
         length += baseEncode(buffer + length, RemSpc, p, hashLength, ENC_BASE32);
 
         // put a space at the end
@@ -2300,12 +2300,12 @@ mDNSexport mDNSu8 *putRData(const DNSMessage *const msg, mDNSu8 *ptr, const mDNS
         int len = 0;
         const rdataOPT *opt;
         const rdataOPT *const end = (const rdataOPT *)&rr->rdata->u.data[rr->rdlength];
-        for (opt = &rr->rdata->u.opt[0]; opt < end; opt++) 
+        for (opt = &rr->rdata->u.opt[0]; opt < end; opt++)
             len += DNSOpt_Data_Space(opt);
-        if (ptr + len > limit) 
-        { 
-            LogMsg("ERROR: putOptRData - out of space"); 
-            return mDNSNULL; 
+        if (ptr + len > limit)
+        {
+            LogMsg("ERROR: putOptRData - out of space");
+            return mDNSNULL;
         }
         for (opt = &rr->rdata->u.opt[0]; opt < end; opt++)
         {
@@ -3290,7 +3290,7 @@ mDNSexport mDNSBool SetRData(const DNSMessage *const msg, const mDNSu8 *ptr, con
         {
             LogInfo("SetRData: nsec3 iteration count %d too big", swap16(nsec3->iterations));
             goto fail;
-        } 
+        }
         p += nsec3->saltLength;
         // There should at least be one byte beyond saltLength
         if (p >= end)
@@ -3864,7 +3864,7 @@ struct UDPSocket_struct { mDNSIPPort     port;  /* ... */ };
 // Note: When we sign a DNS message using DNSDigest_SignMessage(), the current real-time clock value is used, which
 // is why we generally defer signing until we send the message, to ensure the signature is as fresh as possible.
 mDNSexport mStatus mDNSSendDNSMessage(mDNS *const m, DNSMessage *const msg, mDNSu8 *end,
-                                      mDNSInterfaceID InterfaceID, UDPSocket *src, const mDNSAddr *dst, 
+                                      mDNSInterfaceID InterfaceID, UDPSocket *src, const mDNSAddr *dst,
                                       mDNSIPPort dstport, TCPSocket *sock, DomainAuthInfo *authInfo,
                                       mDNSBool useBackgroundTrafficClass)
 {

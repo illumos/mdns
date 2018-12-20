@@ -237,7 +237,7 @@ mDNSexport void PenalizeDNSServer(mDNS *const m, DNSQuestion *q, mDNSOpaque16 re
             (q->qDNSServer ? &q->qDNSServer->addr : mDNSNULL), q, q->qname.c, DNSTypeName(q->qtype), q->SuppressUnusable);
 
     // If we get error from any DNS server, remember the error. If all of the servers,
-    // return the error, then return the first error. 
+    // return the error, then return the first error.
     if (mDNSOpaque16IsZero(q->responseFlags))
         q->responseFlags = responseFlags;
 
@@ -4027,7 +4027,7 @@ mDNSexport void sendLLQRefresh(mDNS *m, DNSQuestion *q)
             return;
             // ThisQInterval is not adjusted when we return from here which means that we will get called back
             // again immediately. As q->servAddr and q->servPort are still valid and the nta->Host is initialized
-            // without any additional discovery for PrivateQuery, things work. 
+            // without any additional discovery for PrivateQuery, things work.
         }
         q->tcp = MakeTCPConn(m, &m->omsg, end, kTCPSocketFlags_UseTLS, &q->servAddr, q->servPort, &q->nta->Host, q, mDNSNULL);
     }
@@ -4616,7 +4616,7 @@ mDNSlocal void handle_unanswered_query(mDNS *const m)
         // the middlebox is DNSSEC aware. If we receive at least one response to a DNSSEC
         // question, we don't turn off validation. Also, we wait for MAX_DNSSEC_RETRANSMISSIONS
         // before turning off validation to accomodate packet loss.
-        // 
+        //
         // Note: req_DO affects only DNSSEC_VALIDATION_SECURE_OPTIONAL questions;
         // DNSSEC_VALIDATION_SECURE questions ignores req_DO.
 
@@ -6308,4 +6308,3 @@ mDNSexport void DiscoverDNSPushNotificationServer(mDNS *m, DNSQuestion *q)
 }
 
 #endif // !UNICAST_DISABLED
-

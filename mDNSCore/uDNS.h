@@ -47,7 +47,7 @@ extern "C" {
 #define QuestionIntervalStep3 (QuestionIntervalStep*QuestionIntervalStep*QuestionIntervalStep)
 #define InitialQuestionInterval ((mDNSPlatformOneSecond + QuestionIntervalStep-1) / QuestionIntervalStep)
 #define MaxQuestionInterval         (3600 * mDNSPlatformOneSecond)
-#define UDNSBackOffMultiplier 2 
+#define UDNSBackOffMultiplier 2
 #define MinQuestionInterval (1 * mDNSPlatformOneSecond)
 
 // For Unicast record registrations, we initialize the interval to 1 second. When we send any query for
@@ -152,10 +152,10 @@ extern void natTraversalHandlePortMapReply(mDNS *const m, NATTraversalInfo *n, c
 
 // DNS Push Notification
 extern void SubscribeToDNSPushNotification(mDNS *m, DNSQuestion *q);
-    
-    
+
+
 #ifdef  __cplusplus
 }
 #endif
 
-#endif // __UDNS_H_
+#endif // __UDNS_H
