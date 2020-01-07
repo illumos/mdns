@@ -1012,8 +1012,10 @@ mDNSlocal void regrecord_callback(mDNS *const m, AuthRecord *rr, mStatus result)
 // This accounts for 2 places (connect_callback, request_callback)
 mDNSlocal void set_peer_pid(request_state *request)
 {
+#ifdef LOCAL_PEEREPID
     pid_t           p    = (pid_t) -1;
     socklen_t       len  = sizeof(p);
+#endif
 
     request->pid_name[0] = '\0';
     request->process_id  = -1;
@@ -1030,7 +1032,6 @@ mDNSlocal void set_peer_pid(request_state *request)
     request->process_id = p;
     debugf("set_peer_pid: Client PEEREPID is %d %s", p, request->pid_name);
 #else   // !LOCAL_PEEREPID
-    len = 0;
     LogInfo("set_peer_pid: Not Supported on this version of OS");
     if (request->sd < 0)
         return;

@@ -11816,7 +11816,7 @@ mDNSlocal void InitDNSConfig(mDNS *const m, DNSQuestion *const question)
         LogDebug("InitDNSConfig: question %p %##s (%s) Timeout %d, DNS Server %#a:%d",
                  question, question->qname.c, DNSTypeName(question->qtype), timeout,
                  question->qDNSServer ? &question->qDNSServer->addr : mDNSNULL,
-                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zp));
+                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zeroIPPort));
     }
     else if (question->TimeoutQuestion && !question->StopTime)
     {
@@ -12042,7 +12042,6 @@ mDNSlocal void FinalizeUnicastQuestion(mDNS *const m, DNSQuestion *question)
     // Ensure DNS related info of duplicate question is same as the orig question
     if (question->DuplicateOf)
     {
-	mDNSIPPort zp = zeroIPPort;
         question->validDNSServers = question->DuplicateOf->validDNSServers;
         // If current(dup) question has DNS Server assigned but the original question has no DNS Server assigned to it,
         // then we log a line as it could indicate an issue
@@ -12058,7 +12057,7 @@ mDNSlocal void FinalizeUnicastQuestion(mDNS *const m, DNSQuestion *question)
         LogInfo("FinalizeUnicastQuestion: Duplicate question %p (%p) %##s (%s), DNS Server %#a:%d",
                  question, question->DuplicateOf, question->qname.c, DNSTypeName(question->qtype),
                  question->qDNSServer ? &question->qDNSServer->addr : mDNSNULL,
-                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zp));
+                 mDNSVal16(question->qDNSServer ? question->qDNSServer->port : zeroIPPort));
     }
 
     ActivateUnicastQuery(m, question, mDNSfalse);
@@ -13977,7 +13976,9 @@ mDNSlocal void mDNSCoreReceiveRawARP(mDNS *const m, const ARP_EthIP *const arp, 
                 }
                 else if (msg == msg4)
                 {
-                    SendARP(m, 2, rr, (mDNSv4Addr *)arp->tpa.b, &arp->sha, (mDNSv4Addr *)arp->spa.b, &arp->sha);
+		    mDNSv4Addr tpa = arp->tpa;
+		    mDNSv4Addr spa = arp->spa;
+                    SendARP(m, 2, rr, &tpa, &arp->sha, &spa, &arp->sha);
                 }
             }
     }
@@ -14600,7 +14601,7 @@ mDNSlocal mStatus mDNS_InitStorage(mDNS *const m, mDNS_PlatformSupport *const p,
     m->WABBrowseQueriesCount    = 0;
     m->WABLBrowseQueriesCount   = 0;
     m->WABRegQueriesCount       = 0;
-    m->AutoTargetServices       = 0;
+    m->AutoTargetServices       = 1;
 
 #if BONJOUR_ON_DEMAND
     m->NumAllInterfaceRecords   = 0;
