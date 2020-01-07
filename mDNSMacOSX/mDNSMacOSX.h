@@ -153,6 +153,8 @@ struct NetworkInterfaceInfoOSX_struct
     int BPF_mcfd;                               // Socket for our IPv6 ND group membership
     u_int BPF_len;
     mDNSBool isExpensive;                       // True if this interface has the IFEF_EXPENSIVE flag set.
+    mDNSBool isAWDL;                            // True if this interface has the IFEF_AWDL flag set.
+    mDNSBool isCLAT46;                          // True if this interface has the IFEF_CLAT46 flag set.
 #ifdef MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
     dispatch_source_t BPF_source;
 #else
@@ -242,8 +244,6 @@ extern int KQueueSet(int fd, u_short flags, short filter, const KQueueEntry *con
 extern void KQueueLock(void);
 extern void KQueueUnlock(const char* task);
 extern void mDNSPlatformCloseFD(KQueueEntry *kq, int fd);
-extern ssize_t myrecvfrom(const int s, void *const buffer, const size_t max,
-                             struct sockaddr *const from, size_t *const fromlen, mDNSAddr *dstaddr, char *ifname, mDNSu8 *ttl);
 
 extern mDNSBool DictionaryIsEnabled(CFDictionaryRef dict);
 
@@ -272,7 +272,7 @@ struct CompileTimeAssertionChecks_mDNSMacOSX
     // Check our structures are reasonable sizes. Including overly-large buffers, or embedding
     // other overly-large structures instead of having a pointer to them, can inadvertently
     // cause structure sizes (and therefore memory usage) to balloon unreasonably.
-    char sizecheck_NetworkInterfaceInfoOSX[(sizeof(NetworkInterfaceInfoOSX) <=  7464) ? 1 : -1];
+    char sizecheck_NetworkInterfaceInfoOSX[(sizeof(NetworkInterfaceInfoOSX) <=  8488) ? 1 : -1];
     char sizecheck_mDNS_PlatformSupport   [(sizeof(mDNS_PlatformSupport)    <=  1378) ? 1 : -1];
 };
 
