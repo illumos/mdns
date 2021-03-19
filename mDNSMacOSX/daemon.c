@@ -1,6 +1,6 @@
-/* -*- Mode: C; tab-width: 4 -*-
+/* -*- Mode: C; tab-width: 4; c-file-style: "bsd"; c-basic-offset: 4; fill-column: 108; indent-tabs-mode: nil -*-
  *
- * Copyright (c) 2002-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2020 Apple Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,27 +32,31 @@
 #include <SystemConfiguration/SCDynamicStoreCopyDHCPInfo.h>
 #include <err.h>
 #include <sysexits.h>
-
-#ifdef UNIT_TEST
-#include "unittest.h"
-#endif
+#include <TargetConditionals.h>
 
 #include "uDNS.h"
 #include "DNSCommon.h"
 #include "mDNSMacOSX.h"             // Defines the specific types needed to run mDNS on this platform
 
 #include "uds_daemon.h"             // Interface to the server side implementation of dns_sd.h
-#include "xpc_services.h"           // Interface to XPC services
+#include "xpc_services.h"
+#include "xpc_service_dns_proxy.h"
+#include "xpc_service_log_utility.h"
 #include "helper.h"
+#include "posix_utilities.h"        // for getLocalTimestamp()
 
-#if AWD_METRICS
+#if MDNSRESPONDER_SUPPORTS(APPLE, METRICS)
 #include "Metrics.h"
 #endif
 
-#if APPLE_OSX_mDNSResponder
-static os_log_t	log_general	        = NULL;
+#if MDNSRESPONDER_SUPPORTS(APPLE, DNSSD_XPC_SERVICE)
+#include "dnssd_server.h"
 #endif
 
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+#include "mdns_managed_defaults.h"
+#include "QuerierSupport.h"
+#endif
 
 // Used on OSX(10.11.x onwards) for manipulating mDNSResponder program arguments
 #if APPLE_OSX_mDNSResponder
@@ -73,9 +77,10 @@ static os_log_t	log_general	        = NULL;
 #define kPreferencesKey_DefaultToBLETriggered     CFSTR("DefaultToBLETriggered")
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
 
-#if TARGET_OS_IPHONE
+#if MDNSRESPONDER_SUPPORTS(APPLE, PREALLOCATED_CACHE)
 #define kPreferencesKey_PreallocateCacheMemory    CFSTR("PreallocateCacheMemory")
 #endif
+#define kPreferencesKey_PQWorkaroundThreshold     CFSTR("PQWorkaroundThreshold")
 #endif
 
 //*************************************************************************************************************
@@ -109,14 +114,19 @@ static mDNSBool NoMulticastAdvertisements = mDNSfalse; // By default, advertise 
 extern mDNSBool StrictUnicastOrdering;
 extern mDNSBool AlwaysAppendSearchDomains;
 extern mDNSBool EnableAllowExpired;
+mDNSexport void INFOCallback(void);
+mDNSexport void dump_state_to_fd(int fd);
 
 #if ENABLE_BLE_TRIGGERED_BONJOUR
 extern mDNSBool EnableBLEBasedDiscovery;
 extern mDNSBool DefaultToBLETriggered;
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
 
-#if TARGET_OS_IPHONE
+#if MDNSRESPONDER_SUPPORTS(APPLE, PREALLOCATED_CACHE)
 static mDNSBool PreallocateCacheMemory = mDNSfalse;
+#endif
+
+#if MDNSRESPONDER_SUPPORTS(APPLE, CACHE_MEM_LIMIT)
 #define kRRCacheMemoryLimit 1000000 // For now, we limit the cache to at most 1MB on iOS devices.
 #endif
 
@@ -138,88 +148,15 @@ static KQSocketEventSource *gEventSources;
 #pragma mark - General Utility Functions
 #endif
 
-#if APPLE_OSX_mDNSResponder && MACOSX_MDNS_MALLOC_DEBUGGING
-
-char _malloc_options[] = "AXZ";
-
-mDNSlocal void validatelists(mDNS *const m)
+#if MDNS_MALLOC_DEBUGGING
+void mDNSPlatformValidateLists()
 {
-#if BONJOUR_ON_DEMAND
-    mDNSu32 NumAllInterfaceRecords   = 0;
-    mDNSu32 NumAllInterfaceQuestions = 0;
-#endif // BONJOUR_ON_DEMAND
+    mDNS *const m = &mDNSStorage;
 
-    // Check local lists
     KQSocketEventSource *k;
     for (k = gEventSources; k; k=k->next)
         if (k->next == (KQSocketEventSource *)~0 || k->fd < 0)
             LogMemCorruption("gEventSources: %p is garbage (%d)", k, k->fd);
-
-    // Check Unix Domain Socket client lists (uds_daemon.c)
-    uds_validatelists();
-
-    // Check core mDNS lists
-    AuthRecord                  *rr;
-    for (rr = m->ResourceRecords; rr; rr=rr->next)
-    {
-        if (rr->next == (AuthRecord *)~0 || rr->resrec.RecordType == 0 || rr->resrec.RecordType == 0xFF)
-            LogMemCorruption("ResourceRecords list: %p is garbage (%X)", rr, rr->resrec.RecordType);
-        if (rr->resrec.name != &rr->namestorage)
-            LogMemCorruption("ResourceRecords list: %p name %p does not point to namestorage %p %##s",
-                             rr, rr->resrec.name->c, rr->namestorage.c, rr->namestorage.c);
-#if BONJOUR_ON_DEMAND
-        if (!AuthRecord_uDNS(rr) && !RRLocalOnly(rr)) NumAllInterfaceRecords++;
-#endif // BONJOUR_ON_DEMAND
-    }
-
-    for (rr = m->DuplicateRecords; rr; rr=rr->next)
-    {
-        if (rr->next == (AuthRecord *)~0 || rr->resrec.RecordType == 0 || rr->resrec.RecordType == 0xFF)
-            LogMemCorruption("DuplicateRecords list: %p is garbage (%X)", rr, rr->resrec.RecordType);
-#if BONJOUR_ON_DEMAND
-        if (!AuthRecord_uDNS(rr) && !RRLocalOnly(rr)) NumAllInterfaceRecords++;
-#endif // BONJOUR_ON_DEMAND
-    }
-
-    rr = m->NewLocalRecords;
-    if (rr)
-        if (rr->next == (AuthRecord *)~0 || rr->resrec.RecordType == 0 || rr->resrec.RecordType == 0xFF)
-            LogMemCorruption("NewLocalRecords: %p is garbage (%X)", rr, rr->resrec.RecordType);
-
-    rr = m->CurrentRecord;
-    if (rr)
-        if (rr->next == (AuthRecord *)~0 || rr->resrec.RecordType == 0 || rr->resrec.RecordType == 0xFF)
-            LogMemCorruption("CurrentRecord: %p is garbage (%X)", rr, rr->resrec.RecordType);
-
-    DNSQuestion                 *q;
-    for (q = m->Questions; q; q=q->next)
-    {
-        if (q->next == (DNSQuestion*)~0 || q->ThisQInterval == (mDNSs32) ~0)
-            LogMemCorruption("Questions list: %p is garbage (%lX %p)", q, q->ThisQInterval, q->next);
-        if (q->DuplicateOf && q->LocalSocket)
-            LogMemCorruption("Questions list: Duplicate Question %p should not have LocalSocket set %##s (%s)", q, q->qname.c, DNSTypeName(q->qtype));
-#if BONJOUR_ON_DEMAND
-        if (!LocalOnlyOrP2PInterface(q->InterfaceID) && mDNSOpaque16IsZero(q->TargetQID))
-            NumAllInterfaceQuestions++;
-#endif // BONJOUR_ON_DEMAND
-    }
-
-    CacheGroup                  *cg;
-    CacheRecord                 *cr;
-    mDNSu32 slot;
-    FORALL_CACHERECORDS(slot, cg, cr)
-    {
-        if (cr->resrec.RecordType == 0 || cr->resrec.RecordType == 0xFF)
-            LogMemCorruption("Cache slot %lu: %p is garbage (%X)", slot, cr, cr->resrec.RecordType);
-        if (cr->CRActiveQuestion)
-        {
-            for (q = m->Questions; q; q=q->next) if (q == cr->CRActiveQuestion) break;
-            if (!q) LogMemCorruption("Cache slot %lu: CRActiveQuestion %p not in m->Questions list %s", slot, cr->CRActiveQuestion, CRDisplayString(m, cr));
-        }
-    }
-
-    // Check core uDNS lists
-    udns_validatelists(m);
 
     // Check platform-layer lists
     NetworkInterfaceInfoOSX     *i;
@@ -231,54 +168,8 @@ mDNSlocal void validatelists(mDNS *const m)
     for (t = m->TunnelClients; t; t=t->next)
         if (t->next == (ClientTunnel *)~0 || t->dstname.c[0] > 63)
             LogMemCorruption("m->TunnelClients: %p is garbage (%d)", t, t->dstname.c[0]);
-
-#if BONJOUR_ON_DEMAND
-    if (m->NumAllInterfaceRecords != NumAllInterfaceRecords)
-    	LogMemCorruption("NumAllInterfaceRecords is %d should be %d", m->NumAllInterfaceRecords, NumAllInterfaceRecords);
-    
-    if (m->NumAllInterfaceQuestions != NumAllInterfaceQuestions)
-    	LogMemCorruption("NumAllInterfaceQuestions is %d should be %d", m->NumAllInterfaceQuestions, NumAllInterfaceQuestions);
-#endif // BONJOUR_ON_DEMAND
 }
-
-mDNSexport void *mallocL(char *msg, unsigned int size)
-{
-    // Allocate space for two words of sanity checking data before the requested block
-    mDNSu32 *mem = malloc(sizeof(mDNSu32) * 2 + size);
-    if (!mem)
-    { LogMsg("malloc( %s : %d ) failed", msg, size); return(NULL); }
-    else
-    {
-        if      (size > 32768)                      LogMsg("malloc( %s : %lu ) @ %p suspiciously large", msg, size, &mem[2]);
-        else if (MACOSX_MDNS_MALLOC_DEBUGGING >= 2) LogMsg("malloc( %s : %lu ) @ %p",                    msg, size, &mem[2]);
-        mem[0] = 0xDEAD1234;
-        mem[1] = size;
-        //mDNSPlatformMemZero(&mem[2], size);
-        memset(&mem[2], 0xFF, size);
-        validatelists(&mDNSStorage);
-        return(&mem[2]);
-    }
-}
-
-mDNSexport void freeL(char *msg, void *x)
-{
-    if (!x)
-        LogMsg("free( %s @ NULL )!", msg);
-    else
-    {
-        mDNSu32 *mem = ((mDNSu32 *)x) - 2;
-        if      (mem[0] == 0xDEADDEAD)  { LogMemCorruption("free( %s : %lu @ %p ) !!!! ALREADY DISPOSED !!!!", msg, mem[1], &mem[2]); return; }
-        if      (mem[0] != 0xDEAD1234)  { LogMemCorruption("free( %s : %lu @ %p ) !!!! NEVER ALLOCATED !!!!",  msg, mem[1], &mem[2]); return; }
-        if      (mem[1] > 32768)                    LogMsg("free( %s : %lu @ %p) suspiciously large",          msg, mem[1], &mem[2]);
-        else if (MACOSX_MDNS_MALLOC_DEBUGGING >= 2) LogMsg("free( %s : %ld @ %p)",                             msg, mem[1], &mem[2]);
-        mem[0] = 0xDEADDEAD;
-        memset(mem+2, 0xFF, mem[1]);
-        validatelists(&mDNSStorage);
-        free(mem);
-    }
-}
-
-#endif
+#endif // MDNS_MALLOC_DEBUGGING
 
 //*************************************************************************************************************
 // Registration
@@ -374,7 +265,7 @@ mDNSlocal void mDNS_StatusCallback(mDNS *const m, mStatus result)
     {
         // Allocate another chunk of cache storage
         static unsigned int allocated = 0;
-#if TARGET_OS_IPHONE
+#if MDNSRESPONDER_SUPPORTS(APPLE, CACHE_MEM_LIMIT)
         if (allocated >= kRRCacheMemoryLimit) return;	// For now we limit the cache to at most 1MB on iOS devices
 #endif
         allocated += kRRCacheGrowSize;
@@ -404,10 +295,12 @@ mDNSlocal void mDNS_StatusCallback(mDNS *const m, mStatus result)
 mDNSlocal void ExitCallback(int sig)
 {
     (void)sig; // Unused
-    LogMsg("%s stopping", mDNSResponderVersionString);
+    LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_DEFAULT, PUB_S " stopping", mDNSResponderVersionString);
 
-    if (udsserver_exit() < 0) 
-        LogMsg("ExitCallback: udsserver_exit failed");
+    if (udsserver_exit() < 0)
+    {
+        LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_DEFAULT, "ExitCallback: udsserver_exit failed");
+    }
 
     debugf("ExitCallback: mDNS_StartExit");
     mDNS_StartExit(&mDNSStorage);
@@ -440,142 +333,197 @@ mDNSlocal void HandleSIG(int sig)
 
 #endif // MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
 
-mDNSexport void INFOCallback(void)
+mDNSexport void dump_state_to_fd(int fd)
 {
+#if !MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    mDNS *const m = &mDNSStorage;
+#endif
+    char buffer[1024];
+    buffer[0] = '\0';
+
     mDNSs32 utc = mDNSPlatformUTC();
     const mDNSs32 now = mDNS_TimeNow(&mDNSStorage);
     NetworkInterfaceInfoOSX     *i;
+#if !MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
     DNSServer *s;
+#endif
     McastResolver *mr;
+    char timestamp[64]; // 64 is enough to store the UTC timestmp
 
-    LogMsg("---- BEGIN STATE LOG ---- %s %s %d", mDNSResponderVersionString, OSXVers ? "OSXVers" : "iOSVers", OSXVers ? OSXVers : iOSVers);
+    LogToFD(fd, "---- BEGIN STATE LOG ---- %s %s %d", mDNSResponderVersionString, OSXVers ? "OSXVers" : "iOSVers", OSXVers ? OSXVers : iOSVers);
+    getLocalTimestamp(timestamp, sizeof(timestamp));
+    LogToFD(fd, "Date: %s", timestamp);
+    LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_DEFAULT, "---- BEGIN STATE LOG ---- (" PUB_S ")", timestamp);
 
-    udsserver_info();
+    udsserver_info_dump_to_fd(fd);
 
-    LogMsgNoIdent("----- Platform Timers -----");
-    LogTimer("m->NextCacheCheck       ", mDNSStorage.NextCacheCheck);
-    LogTimer("m->NetworkChanged       ", mDNSStorage.NetworkChanged);
-    LogTimer("m->p->NotifyUser        ", mDNSStorage.p->NotifyUser);
-    LogTimer("m->p->HostNameConflict  ", mDNSStorage.p->HostNameConflict);
-    LogTimer("m->p->KeyChainTimer     ", mDNSStorage.p->KeyChainTimer);
+    LogToFD(fd, "----- Platform Timers -----");
+    LogTimerToFD(fd, "m->NextCacheCheck       ", mDNSStorage.NextCacheCheck);
+    LogTimerToFD(fd, "m->NetworkChanged       ", mDNSStorage.NetworkChanged);
+    LogTimerToFD(fd, "m->p->NotifyUser        ", mDNSStorage.p->NotifyUser);
+    LogTimerToFD(fd, "m->p->HostNameConflict  ", mDNSStorage.p->HostNameConflict);
+    LogTimerToFD(fd, "m->p->KeyChainTimer     ", mDNSStorage.p->KeyChainTimer);
 
-    xpcserver_info(&mDNSStorage);
+    log_dnsproxy_info_to_fd(fd, &mDNSStorage);
 
-    LogMsgNoIdent("----- KQSocketEventSources -----");
-    if (!gEventSources) LogMsgNoIdent("<None>");
+    LogToFD(fd, "----- KQSocketEventSources -----");
+    if (!gEventSources) LogToFD(fd, "<None>");
     else
     {
         KQSocketEventSource *k;
         for (k = gEventSources; k; k=k->next)
-            LogMsgNoIdent("%3d %s %s", k->fd, k->kqs.KQtask, k->fd == mDNSStorage.uds_listener_skt ? "Listener for incoming UDS clients" : " ");
+            LogToFD(fd, "%3d %s %s", k->fd, k->kqs.KQtask, k->fd == mDNSStorage.uds_listener_skt ? "Listener for incoming UDS clients" : " ");
     }
 
-    LogMsgNoIdent("------ Network Interfaces ------");
-    if (!mDNSStorage.p->InterfaceList) LogMsgNoIdent("<None>");
+    LogToFD(fd, "------ Network Interfaces ------");
+    if (!mDNSStorage.p->InterfaceList) LogToFD(fd, "<None>");
     else
     {
-        LogMsgNoIdent("  Struct addr           Registered                MAC               BSSID                                Interface Address");
+        LogToFD(fd, "  Struct addr           Registered                MAC               BSSID                                Interface Address");
         for (i = mDNSStorage.p->InterfaceList; i; i = i->next)
         {
             // Allow six characters for interface name, for names like "vmnet8"
             if (!i->Exists)
-                LogMsgNoIdent("%p %2ld, %p,  %s %-6s %.6a %.6a %#-14a dormant for %d seconds",
-                              i, i->ifinfo.InterfaceID, i->Registered,
-                              i->sa_family == AF_INET ? "v4" : i->sa_family == AF_INET6 ? "v6" : "??", i->ifinfo.ifname, &i->ifinfo.MAC, &i->BSSID,
-                              &i->ifinfo.ip, utc - i->LastSeen);
+                LogToFD(fd, "%p %2ld, %p,  %s %-6s %.6a %.6a %#-14a dormant for %d seconds",
+                          i, i->ifinfo.InterfaceID, i->Registered,
+                          i->sa_family == AF_INET ? "v4" : i->sa_family == AF_INET6 ? "v6" : "??", i->ifinfo.ifname, &i->ifinfo.MAC, &i->BSSID,
+                          &i->ifinfo.ip, utc - i->LastSeen);
             else
             {
                 const CacheRecord *sps[3];
                 FindSPSInCache(&mDNSStorage, &i->ifinfo.NetWakeBrowse, sps);
-                LogMsgNoIdent("%p %2ld, %p,  %s %-6s %.6a %.6a %s %s %s %s %s %s %#a",
-                              i, i->ifinfo.InterfaceID, i->Registered,
-                              i->sa_family == AF_INET ? "v4" : i->sa_family == AF_INET6 ? "v6" : "??", i->ifinfo.ifname, &i->ifinfo.MAC, &i->BSSID,
-                              i->ifinfo.InterfaceActive ? "Active" : "      ",
-                              i->ifinfo.IPv4Available ? "v4" : "  ",
-                              i->ifinfo.IPv6Available ? "v6" : "  ",
-                              i->ifinfo.Advertise ? "A" : " ",
-                              i->ifinfo.McastTxRx ? "M" : " ",
-                              !(i->ifinfo.InterfaceActive && i->ifinfo.NetWake) ? " " : !sps[0] ? "p" : "P",
-                              &i->ifinfo.ip);
+                LogToFD(fd, "%p %2ld, %p,  %s %-6s %.6a %.6a %s %s %s %s %s %s %#a",
+                          i, i->ifinfo.InterfaceID, i->Registered,
+                          i->sa_family == AF_INET ? "v4" : i->sa_family == AF_INET6 ? "v6" : "??", i->ifinfo.ifname, &i->ifinfo.MAC, &i->BSSID,
+                          i->ifinfo.InterfaceActive ? "Active" : "      ",
+                          i->ifinfo.IPv4Available ? "v4" : "  ",
+                          i->ifinfo.IPv6Available ? "v6" : "  ",
+                          i->ifinfo.Advertise ? "A" : " ",
+                          i->ifinfo.McastTxRx ? "M" : " ",
+                          !(i->ifinfo.InterfaceActive && i->ifinfo.NetWake) ? " " : !sps[0] ? "p" : "P",
+                          &i->ifinfo.ip);
 
                 // Only print the discovered sleep proxies once for the lead/active interface of an interface set.
                 if (i == i->Registered && (sps[0] || sps[1] || sps[2]))
                 {
-                    LogMsgNoIdent("         Sleep Proxy Metric   Name");
-                    if (sps[0]) LogMsgNoIdent("  %13d %#s", SPSMetric(sps[0]->resrec.rdata->u.name.c), sps[0]->resrec.rdata->u.name.c);
-                    if (sps[1]) LogMsgNoIdent("  %13d %#s", SPSMetric(sps[1]->resrec.rdata->u.name.c), sps[1]->resrec.rdata->u.name.c);
-                    if (sps[2]) LogMsgNoIdent("  %13d %#s", SPSMetric(sps[2]->resrec.rdata->u.name.c), sps[2]->resrec.rdata->u.name.c);
+                    LogToFD(fd, "         Sleep Proxy Metric   Name");
+                    if (sps[0]) LogToFD(fd, "  %13d %#s", SPSMetric(sps[0]->resrec.rdata->u.name.c), sps[0]->resrec.rdata->u.name.c);
+                    if (sps[1]) LogToFD(fd, "  %13d %#s", SPSMetric(sps[1]->resrec.rdata->u.name.c), sps[1]->resrec.rdata->u.name.c);
+                    if (sps[2]) LogToFD(fd, "  %13d %#s", SPSMetric(sps[2]->resrec.rdata->u.name.c), sps[2]->resrec.rdata->u.name.c);
                 }
             }
         }
     }
 
-    LogMsgNoIdent("--------- DNS Servers(%d) ----------", NumUnicastDNSServers);
-    if (!mDNSStorage.DNSServers) LogMsgNoIdent("<None>");
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    LogToFD(fd, "----------- DNS Services -----------");
+    {
+        const mdns_dns_service_manager_t manager = Querier_GetDNSServiceManager();
+        if (manager)
+        {
+            mdns_dns_service_manager_iterate(manager,
+            ^ bool (const mdns_dns_service_t service)
+            {
+                char *const desc = mdns_copy_description(service);
+                LogToFD(fd, "%s", desc ? desc : "<missing description>");
+                free(desc);
+                return false;
+            });
+        }
+    }
+#else
+    LogToFD(fd, "--------- DNS Servers(%d) ----------", CountOfUnicastDNSServers(&mDNSStorage));
+    if (!mDNSStorage.DNSServers) LogToFD(fd, "<None>");
     else
     {
         for (s = mDNSStorage.DNSServers; s; s = s->next)
         {
             NetworkInterfaceInfoOSX *ifx = IfindexToInterfaceInfoOSX(s->interface);
-            LogMsgNoIdent("DNS Server %##s %s%s%#a:%d %d %s %d %d %s %s %s %s %s %s",
-                          s->domain.c, ifx ? ifx->ifinfo.ifname : "", ifx ? " " : "", &s->addr, mDNSVal16(s->port),
-                          s->penaltyTime ? s->penaltyTime - mDNS_TimeNow(&mDNSStorage) : 0, DNSScopeToString(s->scoped),
-                          s->timeout, s->resGroupID,
-                          s->req_A ? "v4" : "!v4",  
-                          s->req_AAAA ? "v6" : "!v6",
-                          s->cellIntf ? "cell" : "!cell",
-                          s->isExpensive ? "exp" : "!exp",
-                          s->isCLAT46 ? "clat46" : "!clat46",
-                          s->DNSSECAware ? "DNSSECAware" : "!DNSSECAware");
+            LogToFD(fd, "DNS Server %##s %s%s%#a:%d %d %s %d %d %sv4 %sv6 %scell %sexp %sconstrained %sCLAT46",
+                    s->domain.c, ifx ? ifx->ifinfo.ifname : "", ifx ? " " : "", &s->addr, mDNSVal16(s->port),
+                    s->penaltyTime ? (s->penaltyTime - mDNS_TimeNow(&mDNSStorage)) : 0, DNSScopeToString(s->scopeType),
+                    s->timeout, s->resGroupID,
+                    s->usableA       ? "" : "!",
+                    s->usableAAAA    ? "" : "!",
+                    s->isCell        ? "" : "!",
+                    s->isExpensive   ? "" : "!",
+                    s->isConstrained ? "" : "!",
+                    s->isCLAT46      ? "" : "!");
         }
     }
+#endif // MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
 
-    LogMsgNoIdent("v4answers %d", mDNSStorage.p->v4answers);
-    LogMsgNoIdent("v6answers %d", mDNSStorage.p->v6answers);
-    LogMsgNoIdent("Last DNS Trigger: %d ms ago", (now - mDNSStorage.p->DNSTrigger));
+    LogToFD(fd, "v4answers %d", mDNSStorage.p->v4answers);
+    LogToFD(fd, "v6answers %d", mDNSStorage.p->v6answers);
+    LogToFD(fd, "Last DNS Trigger: %d ms ago", (now - mDNSStorage.p->DNSTrigger));
 
-    LogMsgNoIdent("--------- Mcast Resolvers ----------");
-    if (!mDNSStorage.McastResolvers) LogMsgNoIdent("<None>");
+#if !MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    LogToFD(fd, "-------- Interface Monitors --------");
+    const CFIndex n = m->p->InterfaceMonitors ? CFArrayGetCount(m->p->InterfaceMonitors) : 0;
+    if (n > 0)
+    {
+        for (CFIndex j = 0; j < n; j++)
+        {
+            mdns_interface_monitor_t monitor = (mdns_interface_monitor_t) CFArrayGetValueAtIndex(m->p->InterfaceMonitors, j);
+            char *description = mdns_copy_description(monitor);
+            if (description)
+            {
+                LogToFD(fd, "%s", description);
+                free(description);
+            }
+            else
+            {
+                LogToFD(fd, "monitor %p (no description)", monitor);
+            }
+        }
+    }
+    else
+    {
+        LogToFD(fd, "No interface monitors");
+    }
+#endif
+
+    LogToFD(fd, "--------- Mcast Resolvers ----------");
+    if (!mDNSStorage.McastResolvers) LogToFD(fd, "<None>");
     else
     {
         for (mr = mDNSStorage.McastResolvers; mr; mr = mr->next)
-            LogMsgNoIdent("Mcast Resolver %##s timeout %u", mr->domain.c, mr->timeout);
+            LogToFD(fd, "Mcast Resolver %##s timeout %u", mr->domain.c, mr->timeout);
     }
 
-    LogMsgNoIdent("------------ Hostnames -------------");
-    if (!mDNSStorage.Hostnames) LogMsgNoIdent("<None>");
+    LogToFD(fd, "------------ Hostnames -------------");
+    if (!mDNSStorage.Hostnames) LogToFD(fd, "<None>");
     else
     {
         HostnameInfo *hi;
         for (hi = mDNSStorage.Hostnames; hi; hi = hi->next)
         {
-            LogMsgNoIdent("%##s v4 %d %s", hi->fqdn.c, hi->arv4.state, ARDisplayString(&mDNSStorage, &hi->arv4));
-            LogMsgNoIdent("%##s v6 %d %s", hi->fqdn.c, hi->arv6.state, ARDisplayString(&mDNSStorage, &hi->arv6));
+            LogToFD(fd, "%##s v4 %d %s", hi->fqdn.c, hi->arv4.state, ARDisplayString(&mDNSStorage, &hi->arv4));
+            LogToFD(fd, "%##s v6 %d %s", hi->fqdn.c, hi->arv6.state, ARDisplayString(&mDNSStorage, &hi->arv6));
         }
     }
 
-    LogMsgNoIdent("--------------- FQDN ---------------");
-    if (!mDNSStorage.FQDN.c[0]) LogMsgNoIdent("<None>");
+    LogToFD(fd, "--------------- FQDN ---------------");
+    if (!mDNSStorage.FQDN.c[0]) LogToFD(fd, "<None>");
     else
     {
-        LogMsgNoIdent("%##s", mDNSStorage.FQDN.c);
+        LogToFD(fd, "%##s", mDNSStorage.FQDN.c);
     }
 
-#if AWD_METRICS
-    LogMetrics();
-#endif
-    LogMsgNoIdent("Timenow 0x%08lX (%d)", (mDNSu32)now, now);
-    LogMsg("----  END STATE LOG  ---- %s %s %d", mDNSResponderVersionString, OSXVers ? "OSXVers" : "iOSVers", OSXVers ? OSXVers : iOSVers);
+    #if MDNSRESPONDER_SUPPORTS(APPLE, METRICS)
+        LogMetricsToFD(fd);
+    #endif
+
+//    getLocalTimestamp(timestamp, sizeof(timestamp));
+    LogToFD(fd, "Date: %s", timestamp);
+    LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_DEFAULT, "---- END STATE LOG ---- (" PUB_S ")", timestamp);
+    LogToFD(fd, "----  END STATE LOG  ---- %s %s %d", mDNSResponderVersionString, OSXVers ? "OSXVers" : "iOSVers", OSXVers ? OSXVers : iOSVers);
 }
 
-
-mDNSexport void mDNSPlatformLogToFile(int log_level, const char *buffer)
+mDNSexport void INFOCallback(void)
 {
-    if (!log_general)
-        os_log_error(OS_LOG_DEFAULT, "Could NOT create log handle in init_logging()");
-    else
-        os_log_with_type(log_general, log_level, "%{private}s", buffer);
-    
+    LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_WARNING,
+        "Sending SIGINFO to mDNSResponder daemon is deprecated. To trigger state dump, please use 'dns-sd -O', enter 'dns-sd -h' for more information");
 }
 
 // Writes the state out to the dynamic store and also affects the ASL filter level
@@ -592,13 +540,13 @@ mDNSexport void UpdateDebugState()
     }
 
     CFNumberRef numOne = CFNumberCreate(NULL, kCFNumberSInt32Type, &one);
-    if (!numOne)
+    if (numOne == NULL)
     {
         LogMsg("UpdateDebugState: Could not create CFNumber one");
         return;
     }
     CFNumberRef numZero = CFNumberCreate(NULL, kCFNumberSInt32Type, &zero);
-    if (!numZero)
+    if (numZero == NULL)
     {
         LogMsg("UpdateDebugState: Could not create CFNumber zero");
         CFRelease(numOne);
@@ -655,7 +603,6 @@ mDNSlocal void SignalCallback(CFMachPortRef port, void *msg, CFIndex size, void 
         mDNS_Lock(m);
         FORALL_CACHERECORDS(slot, cg, rr)
         {
-            rr->resrec.mortality = Mortality_Mortal;
             mDNS_PurgeCacheResourceRecord(m, rr);
         }
         // Restart unicast and multicast queries
@@ -722,7 +669,7 @@ mDNSlocal kern_return_t mDNSDaemonInitialize(void)
         return(err);
     }
 
-#if TARGET_OS_IPHONE
+#if MDNSRESPONDER_SUPPORTS(APPLE, PREALLOCATED_CACHE)
     if (PreallocateCacheMemory)
     {
         const int growCount = (kRRCacheMemoryLimit + kRRCacheGrowSize - 1) / kRRCacheGrowSize;
@@ -767,7 +714,6 @@ mDNSlocal void SignalDispatch(dispatch_source_t source)
         mDNS_Lock(m);
         FORALL_CACHERECORDS(slot, cg, rr)
         {
-           rr->resrec.mortality = Mortality_Mortal;
            mDNS_PurgeCacheResourceRecord(m, rr);
         }
         // Restart unicast and multicast queries
@@ -944,7 +890,7 @@ mDNSlocal mDNSu32 DHCPWakeTime(void)
     if (!now) LogMsg("DHCPWakeTime: CFAbsoluteTimeGetCurrent failed");
     else
     {
-        int ic, j;
+        CFIndex ic, j;
 
         const void *pattern = SCDynamicStoreKeyCreateNetworkServiceEntity(NULL, kSCDynamicStoreDomainState, kSCCompAnyRegex, kSCEntNetDHCP);
         if (!pattern)
@@ -980,7 +926,7 @@ mDNSlocal mDNSu32 DHCPWakeTime(void)
                             else
                             {
                                 const UInt8 *d = CFDataGetBytePtr(lease);
-                                if (!d) LogMsg("DHCPWakeTime: CFDataGetBytePtr %d failed", j);
+                                if (!d) LogMsg("DHCPWakeTime: CFDataGetBytePtr %ld failed", (long)j);
                                 else
                                 {
                                     const mDNSu32 elapsed   = now - CFDateGetAbsoluteTime(start);
@@ -1035,33 +981,67 @@ mDNSlocal mDNSBool AllowSleepNow(mDNSs32 now)
         {
             mDNSs32 dhcp = DHCPWakeTime();
             LogSPS("ComputeWakeTime: DHCP Wake %d", dhcp);
-            mDNSs32 interval = mDNSCoreIntervalToNextWake(m, now) / mDNSPlatformOneSecond;
-            if (interval > dhcp) interval = dhcp;
-
+            mDNSNextWakeReason reason = mDNSNextWakeReason_Null;
+            mDNSs32 interval = mDNSCoreIntervalToNextWake(m, now, &reason) / mDNSPlatformOneSecond;
+            if (interval > dhcp)
+            {
+                interval = dhcp;
+                reason = mDNSNextWakeReason_DHCPLeaseRenewal;
+            }
             // If we're not ready to sleep (failed to register with Sleep Proxy, maybe because of
             // transient network problem) then schedule a wakeup in one hour to try again. Otherwise,
             // a single SPS failure could result in a remote machine falling permanently asleep, requiring
             // someone to go to the machine in person to wake it up again, which would be unacceptable.
-            if (!ready && interval > 3600) interval = 3600;
-
+            if (!ready && interval > 3600)
+            {
+                interval = 3600;
+                reason = mDNSNextWakeReason_SleepProxyRegistrationRetry;
+            }
             //interval = 48; // For testing
 
-#if !TARGET_OS_EMBEDDED
-#ifdef kIOPMAcknowledgmentOptionSystemCapabilityRequirements
+#if TARGET_OS_OSX && defined(kIOPMAcknowledgmentOptionSystemCapabilityRequirements)
             if (m->p->IOPMConnection)   // If lightweight-wake capability is available, use that
             {
+                CFStringRef reasonStr;
+                switch (reason)
+                {
+                case mDNSNextWakeReason_NATPortMappingRenewal:
+                    reasonStr = CFSTR("NAT port mapping renewal");
+                    break;
+
+                case mDNSNextWakeReason_RecordRegistrationRenewal:
+                    reasonStr = CFSTR("record registration renewal");
+                    break;
+
+                case mDNSNextWakeReason_UpkeepWake:
+                    reasonStr = CFSTR("upkeep wake");
+                    break;
+
+                case mDNSNextWakeReason_DHCPLeaseRenewal:
+                    reasonStr = CFSTR("DHCP lease renewal");
+                    break;
+
+                case mDNSNextWakeReason_SleepProxyRegistrationRetry:
+                    reasonStr = CFSTR("sleep proxy registration retry");
+                    break;
+
+                case mDNSNextWakeReason_Null:
+                default:
+                    reasonStr = CFSTR("unspecified");
+                    break;
+                }
                 const CFDateRef WakeDate = CFDateCreate(NULL, CFAbsoluteTimeGetCurrent() + interval);
                 if (!WakeDate) LogMsg("ScheduleNextWake: CFDateCreate failed");
                 else
                 {
                     const mDNSs32 reqs         = kIOPMSystemPowerStateCapabilityNetwork;
                     const CFNumberRef Requirements = CFNumberCreate(NULL, kCFNumberSInt32Type, &reqs);
-                    if (!Requirements) LogMsg("ScheduleNextWake: CFNumberCreate failed");
+                    if (Requirements == NULL) LogMsg("ScheduleNextWake: CFNumberCreate failed");
                     else
                     {
-                        const void *OptionKeys[2] = { kIOPMAckDHCPRenewWakeDate, kIOPMAckSystemCapabilityRequirements };
-                        const void *OptionVals[2] = {        WakeDate,          Requirements   };
-                        opts = CFDictionaryCreate(NULL, (void*)OptionKeys, (void*)OptionVals, 2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+                        const void *OptionKeys[3] = { kIOPMAckDHCPRenewWakeDate, kIOPMAckSystemCapabilityRequirements, kIOPMAckClientInfoKey };
+                        const void *OptionVals[3] = { WakeDate, Requirements, reasonStr };
+                        opts = CFDictionaryCreate(NULL, OptionKeys, OptionVals, 3, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
                         if (!opts) LogMsg("ScheduleNextWake: CFDictionaryCreate failed");
                         CFRelease(Requirements);
                     }
@@ -1070,8 +1050,7 @@ mDNSlocal mDNSBool AllowSleepNow(mDNSs32 now)
                 LogSPS("AllowSleepNow: Will request lightweight wakeup in %d seconds", interval);
             }
             else                        // else schedule the wakeup using the old API instead to
-#endif // kIOPMAcknowledgmentOptionSystemCapabilityRequirements
-#endif // TARGET_OS_EMBEDDED
+#endif
             {
                 // If we wake within +/- 30 seconds of our requested time we'll assume the system woke for us,
                 // so we should put it back to sleep. To avoid frustrating the user, we always request at least
@@ -1118,7 +1097,7 @@ mDNSlocal mDNSBool AllowSleepNow(mDNSs32 now)
     }
 
     LogSPS("AllowSleepNow: %s(%lX) %s at %ld (%d ticks remaining)",
-#if !TARGET_OS_EMBEDDED && defined(kIOPMAcknowledgmentOptionSystemCapabilityRequirements)
+#if TARGET_OS_OSX && defined(kIOPMAcknowledgmentOptionSystemCapabilityRequirements)
            (m->p->IOPMConnection) ? "IOPMConnectionAcknowledgeEventWithOptions" :
 #endif
            (result == kIOReturnSuccess) ? "IOAllowPowerChange" : "IOCancelPowerChange",
@@ -1127,8 +1106,8 @@ mDNSlocal mDNSBool AllowSleepNow(mDNSs32 now)
     m->SleepLimit = 0;  // Don't clear m->SleepLimit until after we've logged it above
     m->TimeSlept = mDNSPlatformUTC();
 
-#if !TARGET_OS_EMBEDDED && defined(kIOPMAcknowledgmentOptionSystemCapabilityRequirements)
-    if (m->p->IOPMConnection) IOPMConnectionAcknowledgeEventWithOptions(m->p->IOPMConnection, m->p->SleepCookie, opts);
+#if TARGET_OS_OSX && defined(kIOPMAcknowledgmentOptionSystemCapabilityRequirements)
+    if (m->p->IOPMConnection) IOPMConnectionAcknowledgeEventWithOptions(m->p->IOPMConnection, (IOPMConnectionMessageToken)m->p->SleepCookie, opts);
     else
 #endif
     if (result == kIOReturnSuccess) IOAllowPowerChange (m->p->PowerConnection, m->p->SleepCookie);
@@ -1163,9 +1142,18 @@ mDNSlocal void PrepareForIdle(void *m_param)
     // Run mDNS_Execute to find out the time we next need to wake up
     mDNSs32 start          = mDNSPlatformRawTime();
     mDNSs32 nextTimerEvent = udsserver_idle(mDNSDaemonIdle(m));
+#if MDNSRESPONDER_SUPPORTS(COMMON, DNS_PUSH)
+    if (m->DNSPushServers != mDNSNULL)
+    {
+        nextTimerEvent = dso_idle(m, nextTimerEvent);
+    }
+#endif
     mDNSs32 end            = mDNSPlatformRawTime();
     if (end - start >= WatchDogReportingThreshold)
-        LogInfo("CustomSourceHandler:WARNING: Idle task took %dms to complete", end - start);
+    {
+        LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_WARNING,
+            "CustomSourceHandler: WARNING: Idle task took %d ms to complete", end - start);
+    }
 
     mDNSs32 now = mDNS_TimeNow(m);
 
@@ -1242,6 +1230,9 @@ mDNSlocal void * KQueueLoop(void *m_param)
     const int multiplier = 1000000000 / mDNSPlatformOneSecond;
 #endif
 
+#if MDNSRESPONDER_SUPPORTS(APPLE, DNSSD_XPC_SERVICE)
+    dnssd_server_init();
+#endif
     pthread_mutex_lock(&PlatformStorage.BigMutex);
     LogInfo("Starting time value 0x%08lX (%ld)", (mDNSu32)mDNSStorage.timenow_last, mDNSStorage.timenow_last);
 
@@ -1259,12 +1250,25 @@ mDNSlocal void * KQueueLoop(void *m_param)
         // Run mDNS_Execute to find out the time we next need to wake up
         mDNSs32 start          = mDNSPlatformRawTime();
         mDNSs32 nextTimerEvent = udsserver_idle(mDNSDaemonIdle(m));
+#if MDNSRESPONDER_SUPPORTS(APPLE, DNSSD_XPC_SERVICE)
+        dnssd_server_idle();
+#endif
+#if MDNSRESPONDER_SUPPORTS(COMMON, DNS_PUSH)
+        if (m->DNSPushServers != mDNSNULL)
+        {
+            mDNS_Lock(m);
+            nextTimerEvent = dso_idle(m, m->timenow, nextTimerEvent);
+            mDNS_Unlock(m);
+        }
+#endif
         mDNSs32 end            = mDNSPlatformRawTime();
         if (end - start >= WatchDogReportingThreshold)
-            LogInfo("WARNING: Idle task took %dms to complete", end - start);
+        {
+            LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_WARNING, "WARNING: Idle task took %d ms to complete", end - start);
+        }
 
-#if APPLE_OSX_mDNSResponder && MACOSX_MDNS_MALLOC_DEBUGGING >= 1
-        validatelists(m);
+#if MDNS_MALLOC_DEBUGGING >= 1
+        mDNSPlatformValidateLists();
 #endif
 
         mDNSs32 now = mDNS_TimeNow(m);
@@ -1282,7 +1286,7 @@ mDNSlocal void * KQueueLoop(void *m_param)
             }
             if (mDNS_ExitNow(m, now))
             {
-                LogInfo("mDNS_FinalExit");
+                LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_DEFAULT, "mDNS_FinalExit");
                 mDNS_FinalExit(&mDNSStorage);
                 usleep(1000);       // Little 1ms pause before exiting, so we don't lose our final syslog messages
                 exit(0);
@@ -1379,10 +1383,13 @@ mDNSlocal void * KQueueLoop(void *m_param)
                 const KQueueEntry *const kqentry = new_events[i].udata;
                 mDNSs32 stime = mDNSPlatformRawTime();
                 const char *const KQtask = kqentry->KQtask; // Grab a copy in case KQcallback deletes the task
-                kqentry->KQcallback(new_events[i].ident, new_events[i].filter, kqentry->KQcontext, (new_events[i].flags & EV_EOF) != 0);
+                kqentry->KQcallback((int)new_events[i].ident, new_events[i].filter, kqentry->KQcontext, (new_events[i].flags & EV_EOF) != 0);
                 mDNSs32 etime = mDNSPlatformRawTime();
                 if (etime - stime >= WatchDogReportingThreshold)
-                    LogInfo("WARNING: %s took %dms to complete", KQtask, etime - stime);
+                {
+                    LogRedact(MDNS_LOG_CATEGORY_DEFAULT, MDNS_LOG_WARNING, 
+                        "WARNING: " PUB_S " took %d ms to complete", KQtask, etime - stime);
+                }
             }
         }
     }
@@ -1410,7 +1417,7 @@ mDNSlocal mDNSBool PreferencesGetValueBool(CFStringRef key, mDNSBool defaultValu
     mDNSBool result = defaultValue;
 
     boolean = CFPreferencesCopyAppValue(key, kProgramArguments);
-    if (boolean)
+    if (boolean != NULL)
     {
         if (CFGetTypeID(boolean) == CFBooleanGetTypeID())
             result = CFBooleanGetValue(boolean) ? mDNStrue : mDNSfalse;
@@ -1427,7 +1434,7 @@ mDNSlocal int PreferencesGetValueInt(CFStringRef key, int defaultValue)
     int result = defaultValue;
 
     number = CFPreferencesCopyAppValue(key, kProgramArguments);
-    if (number)
+    if (number != NULL)
     {
         if ((CFGetTypeID(number) == CFNumberGetTypeID()) && CFNumberGetValue(number, kCFNumberIntType, &numberValue))
             result = numberValue;
@@ -1468,23 +1475,39 @@ mDNSlocal void SandboxProcess(void)
 #endif // MDNS_NO_SANDBOX
 }
 
-#if APPLE_OSX_mDNSResponder
+#if MDNSRESPONDER_SUPPORTS(APPLE, OS_LOG)
+#define MDNS_OS_LOG_CATEGORY_INIT(NAME) \
+    do\
+    { \
+        mDNSLogCategory_ ## NAME = os_log_create("com.apple.mDNSResponder", # NAME ); \
+        if (!mDNSLogCategory_ ## NAME ) \
+        { \
+            os_log_error(OS_LOG_DEFAULT, "Could NOT create the " # NAME " log handle in mDNSResponder"); \
+            mDNSLogCategory_ ## NAME = OS_LOG_DEFAULT; \
+        } \
+    } \
+    while (0)
+
+os_log_t mDNSLogCategory_Default    = NULL;
+os_log_t mDNSLogCategory_mDNS       = NULL;
+os_log_t mDNSLogCategory_uDNS       = NULL;
+os_log_t mDNSLogCategory_SPS        = NULL;
+os_log_t mDNSLogCategory_XPC        = NULL;
+os_log_t mDNSLogCategory_Analytics  = NULL;
+os_log_t mDNSLogCategory_DNSSEC     = NULL;
+
 mDNSlocal void init_logging(void)
 {
-    log_general      = os_log_create("com.apple.mDNSResponder", "AllINFO");
-    
-    if (!log_general)
-    {
-        // OS_LOG_DEFAULT is the default logging object, if you are not creating a custom subsystem/category
-        os_log_error(OS_LOG_DEFAULT, "Could NOT create log handle in mDNSResponder");
-    }
+    MDNS_OS_LOG_CATEGORY_INIT(Default);
+    MDNS_OS_LOG_CATEGORY_INIT(mDNS);
+    MDNS_OS_LOG_CATEGORY_INIT(uDNS);
+    MDNS_OS_LOG_CATEGORY_INIT(SPS);
+    MDNS_OS_LOG_CATEGORY_INIT(XPC);
+    MDNS_OS_LOG_CATEGORY_INIT(Analytics);
+    MDNS_OS_LOG_CATEGORY_INIT(DNSSEC);
 }
 #endif
 
-#ifdef UNIT_TEST
-// Run the unit test main
-UNITTEST_MAIN
-#else
 mDNSexport int main(int argc, char **argv)
 {
     int i;
@@ -1495,10 +1518,10 @@ mDNSexport int main(int argc, char **argv)
     bool useSandbox = mDNStrue;
 #endif
 
-#if APPLE_OSX_mDNSResponder
+#if MDNSRESPONDER_SUPPORTS(APPLE, OS_LOG)
     init_logging();
 #endif
-    
+
     mDNSMacOSXSystemBuildNumber(NULL);
     LogMsg("%s starting %s %d", mDNSResponderVersionString, OSXVers ? "OSXVers" : "iOSVers", OSXVers ? OSXVers : iOSVers);
 
@@ -1514,11 +1537,13 @@ mDNSexport int main(int argc, char **argv)
     LogMsg("block bytes wasted  %5d", 32*1024 - sizeof(CacheEntity) * RR_CACHE_SIZE);
 #endif
 
+#if !DEBUG
     if (0 == geteuid())
     {
         LogMsg("mDNSResponder cannot be run as root !! Exiting..");
         return -1;
     }
+#endif // !DEBUG
 
     for (i=1; i<argc; i++)
     {
@@ -1582,10 +1607,21 @@ mDNSexport int main(int argc, char **argv)
     EnableBLEBasedDiscovery   = PreferencesGetValueBool(kPreferencesKey_EnableBLEBasedDiscovery,   EnableBLEBasedDiscovery);
     DefaultToBLETriggered     = PreferencesGetValueBool(kPreferencesKey_DefaultToBLETriggered,     DefaultToBLETriggered);
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
+#endif
 
-#if TARGET_OS_IPHONE
+#if MDNSRESPONDER_SUPPORTS(APPLE, PREALLOCATED_CACHE)
     PreallocateCacheMemory    = PreferencesGetValueBool(kPreferencesKey_PreallocateCacheMemory,    PreallocateCacheMemory);
 #endif
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    PQWorkaroundThreshold     = PreferencesGetValueInt(kPreferencesKey_PQWorkaroundThreshold,      PQWorkaroundThreshold);
+    CFDictionaryRef managedDefaults = mdns_managed_defaults_create("com.apple.mDNSResponder", NULL);
+    if (managedDefaults)
+    {
+        PQWorkaroundThreshold = mdns_managed_defaults_get_int_clamped(managedDefaults,
+            kPreferencesKey_PQWorkaroundThreshold, PQWorkaroundThreshold, NULL);
+        CFRelease(managedDefaults);
+        managedDefaults = NULL;
+    }
 #endif
 
     // Note that mDNSPlatformInit will set DivertMulticastAdvertisements in the mDNS structure
@@ -1611,18 +1647,6 @@ mDNSexport int main(int argc, char **argv)
 #endif // MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
 
     mDNSStorage.p = &PlatformStorage;   // Make sure mDNSStorage.p is set up, because validatelists uses it
-    // Need to Start XPC Server Before LaunchdCheckin() (Reason: rdar11023750)
-    xpc_server_init();
-#if DEBUG
-    if (!useDebugSocket) {
-        if (LaunchdCheckin() == 0)
-            useDebugSocket = mDNStrue;
-    }
-    if (useDebugSocket)
-        SetDebugBoundPath();
-#else
-    LaunchdCheckin();
-#endif
 
 #ifndef MDNSRESPONDER_USES_LIB_DISPATCH_AS_PRIMARY_EVENT_LOOP_MECHANISM
 
@@ -1664,7 +1688,7 @@ mDNSexport int main(int argc, char **argv)
 #endif
     SandboxProcess();
 
-#if AWD_METRICS
+#if MDNSRESPONDER_SUPPORTS(APPLE, METRICS)
     status = MetricsInit();
     if (status) { LogMsg("Daemon start: MetricsInit failed (%d)", status); }
 #endif
@@ -1672,7 +1696,20 @@ mDNSexport int main(int argc, char **argv)
     status = mDNSDaemonInitialize();
     if (status) { LogMsg("Daemon start: mDNSDaemonInitialize failed"); goto exit; }
 
-    status = udsserver_init(launchd_fds, launchd_fds_count);
+    // Need to Start XPC Server Before LaunchdCheckin() (Reason: radar:11023750)
+    xpc_server_init();
+#if DEBUG
+    if (!useDebugSocket) {
+        if (LaunchdCheckin() == 0)
+            useDebugSocket = mDNStrue;
+    }
+    if (useDebugSocket)
+        SetDebugBoundPath();
+#else
+    LaunchdCheckin();
+#endif
+
+    status = udsserver_init(launchd_fds, (mDNSu32)launchd_fds_count);
     if (status) { LogMsg("Daemon start: udsserver_init failed"); goto exit; }
 
     mDNSMacOSXNetworkChanged();
@@ -1700,14 +1737,16 @@ mDNSexport int main(int argc, char **argv)
 exit:
     return(status);
 }
-#endif // UNIT_TEST
 
 // uds_daemon.c support routines /////////////////////////////////////////////
 
-mDNSlocal void kqUDSEventCallback(int fd, short filter, void *context, __unused mDNSBool encounteredEOF)
+mDNSlocal void kqUDSEventCallback(int fd, short filter, void *context, mDNSBool encounteredEOF)
 {
     const KQSocketEventSource *const source = context;
-    source->callback(fd, filter, source->context);
+    (void)filter; // unused
+    (void)encounteredEOF; // unused
+    
+    source->callback(fd, source->context);
 }
 
 // Arrange things so that when data appears on fd, callback is called with context
@@ -1718,7 +1757,7 @@ mDNSexport mStatus udsSupportAddFDToEventLoop(int fd, udsEventCallback callback,
     while (*p && (*p)->fd != fd) p = &(*p)->next;
     if (*p) { LogMsg("udsSupportAddFDToEventLoop: ERROR fd %d already has EventLoop source entry", fd); return mStatus_AlreadyRegistered; }
 
-    KQSocketEventSource *newSource = (KQSocketEventSource*) mallocL("KQSocketEventSource", sizeof *newSource);
+    KQSocketEventSource *newSource = (KQSocketEventSource*) callocL("KQSocketEventSource", sizeof(*newSource));
     if (!newSource) return mStatus_NoMemoryErr;
 
     newSource->next           = mDNSNULL;
@@ -1748,7 +1787,7 @@ mDNSexport mStatus udsSupportAddFDToEventLoop(int fd, udsEventCallback callback,
 int udsSupportReadFD(dnssd_sock_t fd, char *buf, int len, int flags, void *platform_data)
 {
     (void) platform_data;
-    return recv(fd, buf, len, flags);
+    return (int)recv(fd, buf, len, flags);
 }
 
 mDNSexport mStatus udsSupportRemoveFDFromEventLoop(int fd, void *platform_data)     // Note: This also CLOSES the file descriptor

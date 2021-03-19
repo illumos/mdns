@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,26 +14,18 @@
  * limitations under the License.
  */
 
-#include <TargetConditionals.h>
-
-// DNS64 code is only for iOS, which is currently the only Apple OS that supports DNS proxy network extensions.
-
-#if TARGET_OS_IOS
 #include "DNS64.h"
 
+#if MDNSRESPONDER_SUPPORTS(APPLE, DNS64)
+
 #include <AssertMacros.h>
-
-#if __has_include(<nw/private.h>)
-    #include <nw/private.h>
-#else
-    #include <network/nat64.h>
-#endif
-
+#include <nw/private.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "dns_sd.h"
 #include "dns_sd_internal.h"
+#include "mDNSMacOSX.h"
 #include "uDNS.h"
 
 //===========================================================================================================================
@@ -54,12 +46,28 @@ check_compile_time(sizeof_field(DNS64, qnameStash)  == kDNS64IPv4OnlyFQDNLength)
 //  Local Prototypes
 //===========================================================================================================================
 
-mDNSlocal mStatus   DNS64GetIPv6Addrs(mDNS *m, mDNSu16 inResGroupID, struct in6_addr **outAddrs, uint32_t *outAddrCount);
-mDNSlocal mStatus   DNS64GetPrefixes(mDNS *m, mDNSu16 inResGroupID, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount);
-mDNSlocal mDNSBool  DNS64GetReverseIPv6Addr(const domainname *inQName, struct in6_addr *outAddr);
-mDNSlocal mDNSu32   DNS64IPv4OnlyFQDNHash(void);
-mDNSlocal void      DNS64RestartQuestion(mDNS *m, DNSQuestion *q, DNS64State newState);
-mDNSlocal mDNSBool  DNS64TestIPv6Synthesis(mDNS *m, mDNSu16 inResGroupID, const mDNSv4Addr *inV4Addr);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mStatus   _DNS64GetIPv6Addrs(mDNS *m, mdns_dns_service_t inDNSService, struct in6_addr **outAddrs, uint32_t *outAddrCount);
+#else
+mDNSlocal mStatus   _DNS64GetIPv6Addrs(mDNS *m, mDNSu32 inResGroupID, struct in6_addr **outAddrs, uint32_t *outAddrCount);
+#endif
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mStatus   _DNS64GetPrefixes(mDNS *m, mdns_dns_service_t inDNSService, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount);
+#else
+mDNSlocal mStatus   _DNS64GetPrefixes(mDNS *m, mDNSu32 inResGroupID, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount);
+#endif
+mDNSlocal mDNSu32   _DNS64IPv4OnlyFQDNHash(void);
+mDNSlocal void      _DNS64RestartQuestion(mDNS *m, DNSQuestion *q, DNS64State newState);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mDNSBool  _DNS64InterfaceSupportsNAT64(mdns_dns_service_t inDNSService);
+#else
+mDNSlocal mDNSBool  _DNS64InterfaceSupportsNAT64(uint32_t inIfIndex);
+#endif
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mDNSBool  _DNS64TestIPv6Synthesis(mDNS *m, mdns_dns_service_t inDNSService, const mDNSv4Addr *inV4Addr);
+#else
+mDNSlocal mDNSBool  _DNS64TestIPv6Synthesis(mDNS *m, mDNSu32 inResGroupID, const mDNSv4Addr *inV4Addr);
+#endif
 
 //===========================================================================================================================
 //  DNS64StateMachine
@@ -83,21 +91,29 @@ mDNSexport mDNSBool DNS64StateMachine(mDNS *m, DNSQuestion *inQ, const ResourceR
             if ((inQ->qtype      == kDNSType_AAAA) &&
                 (inRR->rrtype    == kDNSType_AAAA) &&
                 (inRR->rrclass   == kDNSClass_IN) &&
-                ((inQ->qnamehash != DNS64IPv4OnlyFQDNHash()) || !SameDomainName(&inQ->qname, kDNS64IPv4OnlyFQDN)) &&
+                ((inQ->qnamehash != _DNS64IPv4OnlyFQDNHash()) || !SameDomainName(&inQ->qname, kDNS64IPv4OnlyFQDN)) &&
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+                inQ->dnsservice && _DNS64InterfaceSupportsNAT64(inQ->dnsservice))
+#else
                 inQ->qDNSServer &&
-                nw_nat64_does_interface_index_support_nat64((uint32_t)(uintptr_t)inQ->qDNSServer->interface))
+                _DNS64InterfaceSupportsNAT64((uint32_t)((uintptr_t)inQ->qDNSServer->interface)))
+#endif
             {
-                DNS64RestartQuestion(m, inQ, kDNS64State_PrefixDiscovery);
+                _DNS64RestartQuestion(m, inQ, kDNS64State_PrefixDiscovery);
                 return (mDNStrue);
             }
             else if ((inQ->qtype == kDNSType_PTR) &&
                 (inRR->rrtype    == kDNSType_PTR) &&
                 (inRR->rrclass   == kDNSClass_IN) &&
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+                inQ->dnsservice && _DNS64InterfaceSupportsNAT64(inQ->dnsservice) &&
+#else
                 inQ->qDNSServer &&
-                nw_nat64_does_interface_index_support_nat64((uint32_t)(uintptr_t)inQ->qDNSServer->interface) &&
-                DNS64GetReverseIPv6Addr(&inQ->qname, NULL))
+                _DNS64InterfaceSupportsNAT64((uint32_t)((uintptr_t)inQ->qDNSServer->interface)) &&
+#endif
+                GetReverseIPv6Addr(&inQ->qname, NULL))
             {
-                DNS64RestartQuestion(m, inQ, kDNS64State_PrefixDiscoveryPTR);
+                _DNS64RestartQuestion(m, inQ, kDNS64State_PrefixDiscoveryPTR);
                 return (mDNStrue);
             }
         }
@@ -113,23 +129,20 @@ mDNSexport mDNSBool DNS64StateMachine(mDNS *m, DNSQuestion *inQ, const ResourceR
             (inRR->rrtype     == kDNSType_AAAA) &&
             (inRR->rrclass    == kDNSClass_IN))
         {
-            DNS64RestartQuestion(m, inQ, kDNS64State_QueryA);
-            return (mDNStrue);
+            _DNS64RestartQuestion(m, inQ, kDNS64State_QueryA);
         }
         else
         {
-            DNS64RestartQuestion(m, inQ, kDNS64State_QueryAAAA);
-            return (mDNStrue);
+            _DNS64RestartQuestion(m, inQ, kDNS64State_QueryAAAA);
         }
-        break;
+        return (mDNStrue);
 
     // The "ipv4only.arpa." question is going to be answered. Restart the question now. DNS64HandleNewQuestion() will decide
     // whether or not to change it to a reverse IPv4 question.
 
     case kDNS64State_PrefixDiscoveryPTR:
-        DNS64RestartQuestion(m, inQ, kDNS64State_QueryPTR);
+        _DNS64RestartQuestion(m, inQ, kDNS64State_QueryPTR);
         return (mDNStrue);
-        break;
 
     // If this question is going to be answered with a CNAME, then do nothing.
     // If this question is going to be answered with a positive A record that's synthesizable, then set the state to
@@ -143,14 +156,19 @@ mDNSexport mDNSBool DNS64StateMachine(mDNS *m, DNSQuestion *inQ, const ResourceR
                 (inResult         == QC_add) &&
                 (inRR->rrtype     == kDNSType_A) &&
                 (inRR->rrclass    == kDNSClass_IN) &&
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+                inQ->dnsservice &&
+                _DNS64TestIPv6Synthesis(m, inQ->dnsservice, &inRR->rdata->u.ipv4))
+#else
                 inQ->qDNSServer &&
-                DNS64TestIPv6Synthesis(m, inQ->qDNSServer->resGroupID, &inRR->rdata->u.ipv4))
+                _DNS64TestIPv6Synthesis(m, inQ->qDNSServer->resGroupID, &inRR->rdata->u.ipv4))
+#endif
             {
                 inQ->dns64.state = kDNS64State_QueryA2;
             }
             else
             {
-                DNS64RestartQuestion(m, inQ, kDNS64State_QueryAAAA);
+                _DNS64RestartQuestion(m, inQ, kDNS64State_QueryAAAA);
                 return (mDNStrue);
             }
         }
@@ -174,10 +192,10 @@ mDNSexport mDNSBool DNS64StateMachine(mDNS *m, DNSQuestion *inQ, const ResourceR
 }
 
 //===========================================================================================================================
-//  DNS64AnswerQuestion
+//  DNS64AnswerCurrentQuestion
 //===========================================================================================================================
 
-mDNSexport mStatus DNS64AnswerQuestion(mDNS *m, DNSQuestion *inQ, const ResourceRecord *inRR, QC_result inResult)
+mDNSexport mStatus DNS64AnswerCurrentQuestion(mDNS *m, const ResourceRecord *inRR, QC_result inResult)
 {
     mStatus                 err;
     ResourceRecord          newRR;
@@ -187,10 +205,19 @@ mDNSexport mStatus DNS64AnswerQuestion(mDNS *m, DNSQuestion *inQ, const Resource
     uint32_t                i;
     struct in_addr          v4Addr;
     struct in6_addr         synthV6;
+    DNSQuestion * const     q = m->CurrentQuestion;
 
-    require_action_quiet(inQ->qDNSServer, exit, err = mStatus_BadParamErr);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    require_action_quiet(q->dnsservice, exit, err = mStatus_BadParamErr);
+#else
+    require_action_quiet(q->qDNSServer, exit, err = mStatus_BadParamErr);
+#endif
 
-    err = DNS64GetPrefixes(m, inQ->qDNSServer->resGroupID, &prefixes, &prefixCount);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    err = _DNS64GetPrefixes(m, q->dnsservice, &prefixes, &prefixCount);
+#else
+    err = _DNS64GetPrefixes(m, q->qDNSServer->resGroupID, &prefixes, &prefixCount);
+#endif
     require_noerr_quiet(err, exit);
 
     newRR               = *inRR;
@@ -205,7 +232,8 @@ mDNSexport mStatus DNS64AnswerQuestion(mDNS *m, DNSQuestion *inQ, const Resource
         if (nw_nat64_synthesize_v6(&prefixes[i], &v4Addr, &synthV6))
         {
             memcpy(rdata.u.ipv6.b, synthV6.s6_addr, 16);
-            inQ->QuestionCallback(m, inQ, &newRR, inResult);
+            q->QuestionCallback(m, q, &newRR, inResult);
+            if (m->CurrentQuestion != q) break;
         }
     }
     err = mStatus_NoError;
@@ -226,7 +254,12 @@ mDNSexport void DNS64HandleNewQuestion(mDNS *m, DNSQuestion *inQ)
         struct in6_addr     v6Addr;
 
         inQ->dns64.state = kDNS64State_ReverseIPv6;
-        if (inQ->qDNSServer && DNS64GetReverseIPv6Addr(&inQ->qname, &v6Addr))
+        memset(&v6Addr, 0, sizeof(v6Addr));
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+        if (inQ->dnsservice && GetReverseIPv6Addr(&inQ->qname, v6Addr.s6_addr))
+#else
+        if (inQ->qDNSServer && GetReverseIPv6Addr(&inQ->qname, v6Addr.s6_addr))
+#endif
         {
             mStatus                 err;
             nw_nat64_prefix_t *     prefixes;
@@ -235,7 +268,11 @@ mDNSexport void DNS64HandleNewQuestion(mDNS *m, DNSQuestion *inQ)
             struct in_addr          v4Addr;
             char                    qnameStr[MAX_REVERSE_MAPPING_NAME_V4];
 
-            err = DNS64GetPrefixes(m, inQ->qDNSServer->resGroupID, &prefixes, &prefixCount);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+            err = _DNS64GetPrefixes(m, inQ->dnsservice, &prefixes, &prefixCount);
+#else
+            err = _DNS64GetPrefixes(m, inQ->qDNSServer->resGroupID, &prefixes, &prefixCount);
+#endif
             require_noerr_quiet(err, exit);
 
             for (i = 0; i < prefixCount; i++)
@@ -302,6 +339,7 @@ mDNSexport void DNS64ResetState(DNSQuestion *inQ)
 //  DNS64RestartQuestions
 //===========================================================================================================================
 
+#if !MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
 mDNSexport void DNS64RestartQuestions(mDNS *m)
 {
     DNSQuestion *       q;
@@ -316,7 +354,7 @@ mDNSexport void DNS64RestartQuestions(mDNS *m)
         if (q->dns64.state != kDNS64State_Initial)
         {
             SetValidDNSServers(m, q);
-            q->triedAllServersOnce = 0;
+            q->triedAllServersOnce = mDNSfalse;
             newServer = GetServerForQuestion(m, q);
             if (q->qDNSServer != newServer)
             {
@@ -342,19 +380,32 @@ mDNSexport void DNS64RestartQuestions(mDNS *m)
         mDNS_StartQuery_internal(m, q);
     }
 }
+#endif
 
 //===========================================================================================================================
-//  DNS64GetIPv6Addrs
+//  _DNS64GetIPv6Addrs
 //===========================================================================================================================
 
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+#define IsPositiveAAAAFromDNSService(RR, DNS_SERVICE)       \
+    (((RR)->dnsservice == (DNS_SERVICE))  &&                \
+    ((RR)->rrtype == kDNSType_AAAA) &&                      \
+    ((RR)->RecordType != kDNSRecordTypePacketNegative) &&   \
+    !(RR)->InterfaceID)
+#else
 #define IsPositiveAAAAFromResGroup(RR, RES_GROUP_ID)        \
     ((RR)->rDNSServer &&                                    \
     ((RR)->rDNSServer->resGroupID == RES_GROUP_ID) &&       \
     ((RR)->rrtype == kDNSType_AAAA) &&                      \
     ((RR)->RecordType != kDNSRecordTypePacketNegative) &&   \
     !(RR)->InterfaceID)
+#endif
 
-mDNSlocal mStatus DNS64GetIPv6Addrs(mDNS *m, const mDNSu16 inResGroupID, struct in6_addr **outAddrs, uint32_t *outAddrCount)
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mStatus _DNS64GetIPv6Addrs(mDNS *m, mdns_dns_service_t inDNSService, struct in6_addr **outAddrs, uint32_t *outAddrCount)
+#else
+mDNSlocal mStatus _DNS64GetIPv6Addrs(mDNS *m, const mDNSu32 inResGroupID, struct in6_addr **outAddrs, uint32_t *outAddrCount)
+#endif
 {
     mStatus                 err;
     const CacheGroup *      cg;
@@ -363,13 +414,17 @@ mDNSlocal mStatus DNS64GetIPv6Addrs(mDNS *m, const mDNSu16 inResGroupID, struct 
     uint32_t                addrCount;
     uint32_t                recordCount;
 
-    cg = CacheGroupForName(m, DNS64IPv4OnlyFQDNHash(), kDNS64IPv4OnlyFQDN);
+    cg = CacheGroupForName(m, _DNS64IPv4OnlyFQDNHash(), kDNS64IPv4OnlyFQDN);
     require_action_quiet(cg, exit, err = mStatus_NoSuchRecord);
 
     recordCount = 0;
     for (cr = cg->members; cr; cr = cr->next)
     {
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+        if (IsPositiveAAAAFromDNSService(&cr->resrec, inDNSService))
+#else
         if (IsPositiveAAAAFromResGroup(&cr->resrec, inResGroupID))
+#endif
         {
             recordCount++;
         }
@@ -382,7 +437,11 @@ mDNSlocal mStatus DNS64GetIPv6Addrs(mDNS *m, const mDNSu16 inResGroupID, struct 
     addrCount = 0;
     for (cr = cg->members; cr && (addrCount < recordCount); cr = cr->next)
     {
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+        if (IsPositiveAAAAFromDNSService(&cr->resrec, inDNSService))
+#else
         if (IsPositiveAAAAFromResGroup(&cr->resrec, inResGroupID))
+#endif
         {
             memcpy(addrs[addrCount].s6_addr, cr->resrec.rdata->u.ipv6.b, 16);
             addrCount++;
@@ -400,10 +459,14 @@ exit:
 }
 
 //===========================================================================================================================
-//  DNS64GetPrefixes
+//  _DNS64GetPrefixes
 //===========================================================================================================================
 
-mDNSlocal mStatus DNS64GetPrefixes(mDNS *m, mDNSu16 inResGroupID, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount)
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mStatus _DNS64GetPrefixes(mDNS *m, mdns_dns_service_t inDNSService, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount)
+#else
+mDNSlocal mStatus _DNS64GetPrefixes(mDNS *m, mDNSu32 inResGroupID, nw_nat64_prefix_t **outPrefixes, uint32_t *outPrefixCount)
+#endif
 {
     mStatus                 err;
     struct in6_addr *       v6Addrs;
@@ -411,7 +474,11 @@ mDNSlocal mStatus DNS64GetPrefixes(mDNS *m, mDNSu16 inResGroupID, nw_nat64_prefi
     nw_nat64_prefix_t *     prefixes;
     int32_t                 prefixCount;
 
-    err = DNS64GetIPv6Addrs(m, inResGroupID, &v6Addrs, &v6AddrCount);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    err = _DNS64GetIPv6Addrs(m, inDNSService, &v6Addrs, &v6AddrCount);
+#else
+    err = _DNS64GetIPv6Addrs(m, inResGroupID, &v6Addrs, &v6AddrCount);
+#endif
     require_noerr_quiet(err, exit);
 
     prefixCount = nw_nat64_copy_prefixes_from_ipv4only_records(v6Addrs, v6AddrCount, &prefixes);
@@ -426,55 +493,10 @@ exit:
 }
 
 //===========================================================================================================================
-//  DNS64GetReverseIPv6Addr
+//  _DNS64IPv4OnlyFQDNHash
 //===========================================================================================================================
 
-#define kReverseIPv6Domain  ((const domainname *) "\x3" "ip6" "\x4" "arpa")
-
-mDNSlocal mDNSBool DNS64GetReverseIPv6Addr(const domainname *inQName, struct in6_addr *outAddr)
-{
-    const mDNSu8 *      ptr;
-    int                 i;
-    unsigned int        c;
-    unsigned int        nl;
-    unsigned int        nu;
-
-    // If the name is of the form "x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.x.ip6.arpa.", where each x
-    // is a hex digit, then the sequence of 32 hex digit labels represents the nibbles of an IPv6 address in reverse order.
-    // See <https://tools.ietf.org/html/rfc3596#section-2.5>.
-
-    ptr = (const mDNSu8 *)inQName;
-    for (i = 0; i < 16; i++)
-    {
-        if (*ptr++ != 1) return (mDNSfalse);                    // If this label's length is not 1, then fail.
-        c = *ptr++;                                             // Get label byte.
-        if (     (c >= '0') && (c <= '9')) nl =  c - '0';       // If it's a hex digit, get its numeric value.
-        else if ((c >= 'a') && (c <= 'f')) nl = (c - 'a') + 10;
-        else if ((c >= 'A') && (c <= 'F')) nl = (c - 'A') + 10;
-        else                               return (mDNSfalse);  // Otherwise, fail.
-
-        if (*ptr++ != 1) return (mDNSfalse);                    // If this label's length is not 1, then fail.
-        c = *ptr++;                                             // Get label byte.
-        if (     (c >= '0') && (c <= '9')) nu =  c - '0';       // If it's a hex digit, get its numeric value.
-        else if ((c >= 'a') && (c <= 'f')) nu = (c - 'a') + 10;
-        else if ((c >= 'A') && (c <= 'F')) nu = (c - 'A') + 10;
-        else                               return (mDNSfalse);  // Otherwise, fail.
-
-        if (outAddr) outAddr->s6_addr[15 - i] = (mDNSu8)((nu << 4) | nl);
-    }
-
-    // The rest of the name needs to be "ip6.arpa.". If it isn't, fail.
-
-    if (!SameDomainName((const domainname *)ptr, kReverseIPv6Domain)) return (mDNSfalse);
-
-    return (mDNStrue);
-}
-
-//===========================================================================================================================
-//  DNS64IPv4OnlyFQDNHash
-//===========================================================================================================================
-
-mDNSlocal mDNSu32 DNS64IPv4OnlyFQDNHash(void)
+mDNSlocal mDNSu32 _DNS64IPv4OnlyFQDNHash(void)
 {
     static dispatch_once_t      sHashOnce;
     static mDNSu32              sHash;
@@ -485,10 +507,10 @@ mDNSlocal mDNSu32 DNS64IPv4OnlyFQDNHash(void)
 }
 
 //===========================================================================================================================
-//  DNS64RestartQuestion
+//  _DNS64RestartQuestion
 //===========================================================================================================================
 
-mDNSlocal void DNS64RestartQuestion(mDNS *const m, DNSQuestion *inQ, DNS64State inNewState)
+mDNSlocal void _DNS64RestartQuestion(mDNS *const m, DNSQuestion *inQ, DNS64State inNewState)
 {
     mDNS_StopQuery_internal(m, inQ);
 
@@ -504,7 +526,7 @@ mDNSlocal void DNS64RestartQuestion(mDNS *const m, DNSQuestion *inQ, DNS64State 
 
         memcpy(inQ->dns64.qnameStash, &inQ->qname, sizeof(inQ->dns64.qnameStash));
         AssignDomainName(&inQ->qname, kDNS64IPv4OnlyFQDN);
-        inQ->qnamehash = DNS64IPv4OnlyFQDNHash();
+        inQ->qnamehash = _DNS64IPv4OnlyFQDNHash();
         inQ->qtype = kDNSType_AAAA;
         break;
 
@@ -532,10 +554,44 @@ mDNSlocal void DNS64RestartQuestion(mDNS *const m, DNSQuestion *inQ, DNS64State 
 }
 
 //===========================================================================================================================
-//  DNS64TestIPv6Synthesis
+//  _DNS64InterfaceSupportsNAT64
 //===========================================================================================================================
 
-mDNSlocal mDNSBool DNS64TestIPv6Synthesis(mDNS *m, mDNSu16 inResGroupID, const mDNSv4Addr *inV4Addr)
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mDNSBool _DNS64InterfaceSupportsNAT64(mdns_dns_service_t inDNSService)
+{
+    if (!mdns_dns_service_interface_has_ipv4_connectivity(inDNSService) &&
+        mdns_dns_service_interface_has_ipv6_connectivity(inDNSService))
+    {
+        return (mDNStrue);
+    }
+    else
+    {
+        return (mDNSfalse);
+    }
+}
+#else
+mDNSlocal mDNSBool _DNS64InterfaceSupportsNAT64(uint32_t inIfIndex)
+{
+    mdns_interface_monitor_t monitor = GetInterfaceMonitorForIndex(inIfIndex);
+    if (monitor && !mdns_interface_monitor_has_ipv4_connectivity(monitor) &&
+        mdns_interface_monitor_has_ipv6_connectivity(monitor))
+    {
+        return (mDNStrue);
+    }
+    return (mDNSfalse);
+}
+#endif
+
+//===========================================================================================================================
+//  _DNS64TestIPv6Synthesis
+//===========================================================================================================================
+
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+mDNSlocal mDNSBool _DNS64TestIPv6Synthesis(mDNS *m, mdns_dns_service_t inDNSService, const mDNSv4Addr *inV4Addr)
+#else
+mDNSlocal mDNSBool _DNS64TestIPv6Synthesis(mDNS *m, mDNSu32 inResGroupID, const mDNSv4Addr *inV4Addr)
+#endif
 {
     mStatus                 err;
     nw_nat64_prefix_t *     prefixes    = NULL;
@@ -545,7 +601,11 @@ mDNSlocal mDNSBool DNS64TestIPv6Synthesis(mDNS *m, mDNSu16 inResGroupID, const m
     struct in6_addr         synthV6;
     mDNSBool                result      = mDNSfalse;
 
-    err = DNS64GetPrefixes(m, inResGroupID, &prefixes, &prefixCount);
+#if MDNSRESPONDER_SUPPORTS(APPLE, QUERIER)
+    err = _DNS64GetPrefixes(m, inDNSService, &prefixes, &prefixCount);
+#else
+    err = _DNS64GetPrefixes(m, inResGroupID, &prefixes, &prefixCount);
+#endif
     require_noerr_quiet(err, exit);
 
     memcpy(&v4Addr.s_addr, inV4Addr->b, 4);
@@ -562,4 +622,4 @@ exit:
     if (prefixes) free(prefixes);
     return (result);
 }
-#endif  // TARGET_OS_IOS
+#endif  // MDNSRESPONDER_SUPPORTS(APPLE, DNS64)

@@ -8,6 +8,7 @@
 #include <netdb.h>                  // for getaddrinfo
 #include <net/if.h>
 #include <pthread.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 // Primary interface info that is used when simulating the receive of the response packet
 extern mDNSInterfaceID primary_interfaceID;
@@ -51,5 +52,13 @@ extern int      LogEtcHosts_ut(mDNS *const m);
 extern mDNSBool mDNSMacOSXCreateEtcHostsEntry_ut(const domainname *domain, const struct sockaddr *sa,
                                                  const domainname *cname, char *ifname, AuthHash *auth);
 extern void     UpdateEtcHosts_ut(void *context);
+extern mStatus  AddDNSServer_ut(void);
+extern mStatus  AddDNSServerScoped_ut(mDNSInterfaceID interfaceID, ScopeType scoped);
+extern mStatus  force_uDNS_SetupDNSConfig_ut(mDNS *const m);
+extern mStatus  verify_cache_addr_order_for_domain_ut(mDNS *const m, mDNSu8* octet, mDNSu32 count, const domainname *const name);
+
+// HelperFunctionTest
+extern void mDNSDomainLabelFromCFString_ut(CFStringRef cfs, domainlabel *const namelabel);
+mDNSexport mDNSu32 IndexForInterfaceByName_ut(const char *ifname);
 
 #endif /* UNITTEST_COMMON_H */

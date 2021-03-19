@@ -82,7 +82,7 @@ mDNSexport mStatus start_client_request(request_state* req, char *msgbuf, size_t
 	init_client_request(req, msgbuf, msgsz, op);
 
 	mStatus result = handle_client_request_ut((void*)req);
-	DNSQuestion* q = &req->u.queryrecord.q;
+	DNSQuestion* q = &req->u.queryrecord.op.q;
 	q->LocalSocket = socket;
 	return result;
 }
@@ -94,7 +94,7 @@ mDNSexport void receive_response(const request_state* req, DNSMessage *msg, size
 	mDNSAddr srcaddr;
 	mDNSIPPort srcport, dstport;
 	const mDNSu8 * end;
-	DNSQuestion *q = (DNSQuestion *)&req->u.queryrecord.q;
+	DNSQuestion *q = (DNSQuestion *)&req->u.queryrecord.op.q;
 	UInt8* data = (UInt8*)msg;
 
 	// Used same values for DNS server as specified during init of unit test
@@ -155,3 +155,71 @@ mDNSexport void get_ip(const char *const name, struct sockaddr_storage *result)
 	if (aiList) freeaddrinfo(aiList);
 }
 
+// The AddDNSServer_ut function adds a dns server to mDNSResponder's list.
+mDNSexport mStatus AddDNSServerScoped_ut(mDNSInterfaceID interfaceID, ScopeType scoped)
+{
+    mDNS *m = &mDNSStorage;
+    m->timenow = 0;
+    mDNS_Lock(m);
+    domainname  d;
+    mDNSAddr    addr;
+    mDNSIPPort  port;
+    mDNSs32     serviceID      = 0;
+    mDNSu32     timeout        = dns_server_timeout;
+    mDNSBool    cellIntf       = 0;
+    mDNSBool    isExpensive    = 0;
+    mDNSBool    isConstrained  = 0;
+    mDNSBool    isCLAT46       = mDNSfalse;
+    mDNSu32     resGroupID     = dns_server_resGroupID;
+    mDNSBool    reqA           = mDNStrue;
+    mDNSBool    reqAAAA        = mDNStrue;
+    mDNSBool    reqDO          = mDNSfalse;
+    d.c[0]                     = 0;
+    addr.type                  = mDNSAddrType_IPv4;
+    addr.ip.v4.NotAnInteger    = dns_server_ipv4.NotAnInteger;
+    port.NotAnInteger          = client_resp_src_port;
+    mDNS_AddDNSServer(m, &d, interfaceID, serviceID, &addr, port, scoped, timeout,
+                      cellIntf, isExpensive, isConstrained, isCLAT46, resGroupID,
+                      reqA, reqAAAA, reqDO);
+    mDNS_Unlock(m);
+    return mStatus_NoError;
+}
+
+mDNSexport mStatus AddDNSServer_ut(void)
+{
+    return AddDNSServerScoped_ut(primary_interfaceID, kScopeNone);
+}
+
+mDNSexport mStatus  force_uDNS_SetupDNSConfig_ut(mDNS *const m)
+{
+    m->p->LastConfigGeneration = 0;
+    return uDNS_SetupDNSConfig(m);
+}
+
+mDNSexport mStatus verify_cache_addr_order_for_domain_ut(mDNS *const m, mDNSu8* octet, mDNSu32 count, const domainname *const name)
+{
+    mStatus result = mStatus_NoError;
+    const CacheGroup *cg = CacheGroupForName(m, DomainNameHashValue(name), name);
+    if (cg)
+    {
+        mDNSu32 i;
+        CacheRecord **rp = (CacheRecord **)&cg->members;
+        for (i = 0 ; *rp && i < count ; i++ )
+        {
+            if ((*rp)->resrec.rdata->u.ipv4.b[3] != octet[i])
+            {
+                LogInfo ("Octet %d compare failed %d != %d", i, (*rp)->resrec.rdata->u.ipv4.b[3], octet[i]);
+                break;
+            }
+            rp = &(*rp)->next;
+        }
+        if (i != count) result = mStatus_Invalid;
+    }
+    else
+    {
+        LogInfo ("Cache group not found");
+        result = mStatus_Invalid;
+    }
+
+    return result;
+}

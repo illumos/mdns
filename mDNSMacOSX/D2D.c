@@ -1,6 +1,5 @@
-/* -*- Mode: C; tab-width: 4 -*-
- *
- * Copyright (c) 2002-2018 Apple Inc. All rights reserved.
+/*
+ * Copyright (c) 2002-2020 Apple Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +22,7 @@
 #include "dns_sd_internal.h"
 #include "uds_daemon.h"
 #include "BLE.h"
+#include "mdns_powerlog.h"
 
 D2DStatus D2DInitialize(CFRunLoopRef runLoop, D2DServiceCallback serviceCallback, void* userData) __attribute__((weak_import));
 D2DStatus D2DRetain(D2DServiceInstance instanceHandle, D2DTransportType transportType) __attribute__((weak_import));
@@ -33,7 +33,7 @@ D2DStatus D2DStartBrowsingForKeyOnTransport(const Byte *key, const size_t keySiz
 D2DStatus D2DStopBrowsingForKeyOnTransport(const Byte *key, const size_t keySize, D2DTransportType transport) __attribute__((weak_import));
 void D2DStartResolvingPairOnTransport(const Byte *key, const size_t keySize, const Byte *value, const size_t valueSize, D2DTransportType transport) __attribute__((weak_import));
 void D2DStopResolvingPairOnTransport(const Byte *key, const size_t keySize, const Byte *value, const size_t valueSize, D2DTransportType transport) __attribute__((weak_import));
-D2DStatus D2DTerminate() __attribute__((weak_import));
+D2DStatus D2DTerminate(void) __attribute__((weak_import));
 
 #pragma mark - D2D Support
 
@@ -48,9 +48,9 @@ mDNSexport void D2D_start_advertising_interface(NetworkInterfaceInfo *interface)
             LogInfo("D2D_start_advertising_interface: %s", interface->ifname);
 
         if (interface->RR_A.resrec.RecordType)
-            external_start_advertising_service(&interface->RR_A.resrec, 0);
+            external_start_advertising_service(&interface->RR_A.resrec, 0, 0);
         if (interface->RR_PTR.resrec.RecordType)
-            external_start_advertising_service(&interface->RR_PTR.resrec, 0);
+            external_start_advertising_service(&interface->RR_PTR.resrec, 0, 0);
     }
 }
 
@@ -63,9 +63,9 @@ mDNSexport void D2D_stop_advertising_interface(NetworkInterfaceInfo *interface)
             LogInfo("D2D_stop_advertising_interface: %s", interface->ifname);
 
         if (interface->RR_A.resrec.RecordType)
-            external_stop_advertising_service(&interface->RR_A.resrec, 0);
+            external_stop_advertising_service(&interface->RR_A.resrec, 0, 0);
         if (interface->RR_PTR.resrec.RecordType)
-            external_stop_advertising_service(&interface->RR_PTR.resrec, 0);
+            external_stop_advertising_service(&interface->RR_PTR.resrec, 0, 0);
     }
 }
 
@@ -75,7 +75,7 @@ mDNSexport void D2D_stop_advertising_record(AuthRecord *ar)
     DNSServiceFlags flags = deriveD2DFlagsFromAuthRecType(ar->ARType);
     if (callExternalHelpers(ar->resrec.InterfaceID, ar->resrec.name, flags))
     {
-        external_stop_advertising_service(&ar->resrec, flags);
+        external_stop_advertising_service(&ar->resrec, flags, 0);
     }
 }
 
@@ -85,7 +85,7 @@ mDNSexport void D2D_start_advertising_record(AuthRecord *ar)
     DNSServiceFlags flags = deriveD2DFlagsFromAuthRecType(ar->ARType);
     if (callExternalHelpers(ar->resrec.InterfaceID, ar->resrec.name, flags))
     {
-        external_start_advertising_service(&ar->resrec, flags);
+        external_start_advertising_service(&ar->resrec, flags, 0);
     }
 }
 
@@ -245,8 +245,7 @@ mDNSlocal void D2DBrowseListRetain(const domainname *const name, mDNSu16 type)
 
     if (!*ptr)
     {
-        *ptr = mDNSPlatformMemAllocate(sizeof(**ptr));
-        mDNSPlatformMemZero(*ptr, sizeof(**ptr));
+        *ptr = (D2DBrowseListElem *) mDNSPlatformMemAllocateClear(sizeof(**ptr));
         (*ptr)->type = type;
         AssignDomainName(&(*ptr)->name, name);
     }
@@ -351,7 +350,7 @@ mDNSlocal mStatus xD2DParse(const mDNSu8 * const lhs, const mDNSu16 lhs_len, con
         LogInfo("xD2DParse: got rr: %s", CRDisplayString(m, &m->rec.r));
     }
 
-    *D2DListp = mDNSPlatformMemAllocate(sizeof(D2DRecordListElem) + (m->rec.r.resrec.rdlength <= sizeof(RDataBody) ? 0 : m->rec.r.resrec.rdlength - sizeof(RDataBody)));
+    *D2DListp = (D2DRecordListElem *) mDNSPlatformMemAllocateClear(sizeof(D2DRecordListElem) + (m->rec.r.resrec.rdlength <= sizeof(RDataBody) ? 0 : m->rec.r.resrec.rdlength - sizeof(RDataBody)));
     if (!*D2DListp) return mStatus_NoMemoryErr;
 
     AuthRecord *rr = &(*D2DListp)->ar;
@@ -625,7 +624,7 @@ mDNSlocal D2DTransportType xD2DInterfaceToTransportType(mDNSInterfaceID Interfac
     return D2DTransportMax;
 }
 
-mDNSexport void external_start_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags)
+mDNSexport void external_start_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags, pid_t clientPID)
 {
 #if ENABLE_BLE_TRIGGERED_BONJOUR
     // BLE support currently not handled by a D2D plugin
@@ -640,10 +639,10 @@ mDNSexport void external_start_browsing_for_service(mDNSInterfaceID InterfaceID,
     }
     else
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
-        internal_start_browsing_for_service(InterfaceID, typeDomain, qtype, flags);
+        internal_start_browsing_for_service(InterfaceID, typeDomain, qtype, flags, clientPID);
 }
 
-mDNSexport void internal_start_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags)
+mDNSexport void internal_start_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
 
@@ -664,18 +663,32 @@ mDNSexport void internal_start_browsing_for_service(mDNSInterfaceID InterfaceID,
             for (i = 0; i < D2DTransportMax; i++)
             {
                 if (i == excludedTransport) continue;
-                if (D2DStartBrowsingForKeyOnTransport) D2DStartBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, i);
+                if (D2DStartBrowsingForKeyOnTransport)
+                {
+                    if (i == D2DAWDLTransport)
+                    {
+                        mdns_powerlog_awdl_browse_start(typeDomain->c, qtype, clientPID);
+                    }
+                    D2DStartBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, i);
+                }
             }
         }
         else
         {
-            if (D2DStartBrowsingForKeyOnTransport) D2DStartBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, transportType);
+            if (D2DStartBrowsingForKeyOnTransport)
+            {
+                if (transportType == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_browse_start(typeDomain->c, qtype, clientPID);
+                }
+                D2DStartBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, transportType);
+            }
         }
     }
     D2DBrowseListRetain(&lower, qtype);
 }
 
-mDNSexport void external_stop_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags)
+mDNSexport void external_stop_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags, pid_t clientPID)
 {
 #if ENABLE_BLE_TRIGGERED_BONJOUR
     // BLE support currently not handled by a D2D plugin
@@ -691,10 +704,10 @@ mDNSexport void external_stop_browsing_for_service(mDNSInterfaceID InterfaceID, 
     }
     else
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
-        internal_stop_browsing_for_service(InterfaceID, typeDomain, qtype, flags);
+        internal_stop_browsing_for_service(InterfaceID, typeDomain, qtype, flags, clientPID);
 }
 
-mDNSexport void internal_stop_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags)
+mDNSexport void internal_stop_browsing_for_service(mDNSInterfaceID InterfaceID, const domainname *const typeDomain, DNS_TypeValues qtype, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
 
@@ -716,12 +729,26 @@ mDNSexport void internal_stop_browsing_for_service(mDNSInterfaceID InterfaceID, 
             for (i = 0; i < D2DTransportMax; i++)
             {
                 if (i == excludedTransport) continue;
-                if (D2DStopBrowsingForKeyOnTransport) D2DStopBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, i);
+                if (D2DStopBrowsingForKeyOnTransport)
+                {
+                    D2DStopBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, i);
+                    if (i == D2DAWDLTransport)
+                    {
+                        mdns_powerlog_awdl_browse_stop(typeDomain->c, qtype, clientPID);
+                    }
+                }
             }
         }
         else
         {
-            if (D2DStopBrowsingForKeyOnTransport) D2DStopBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, transportType);
+            if (D2DStopBrowsingForKeyOnTransport)
+            {
+                D2DStopBrowsingForKeyOnTransport(compression_lhs, end - compression_lhs, transportType);
+                if (transportType == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_browse_stop(typeDomain->c, qtype, clientPID);
+                }
+            }
         }
 
         // The D2D driver may not generate the D2DServiceLost event for this key after
@@ -731,7 +758,7 @@ mDNSexport void internal_stop_browsing_for_service(mDNSInterfaceID InterfaceID, 
     }
 }
 
-mDNSexport void external_start_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags)
+mDNSexport void external_start_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags, pid_t clientPID)
 {
 #if ENABLE_BLE_TRIGGERED_BONJOUR
     if (applyToBLE(resourceRecord->InterfaceID, flags))
@@ -743,10 +770,10 @@ mDNSexport void external_start_advertising_service(const ResourceRecord *const r
     }
     else
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
-        internal_start_advertising_service(resourceRecord, flags);
+        internal_start_advertising_service(resourceRecord, flags, clientPID);
 }
 
-mDNSexport void internal_start_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags)
+mDNSexport void internal_start_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
     mDNSu8 *rhs = NULL;
@@ -772,16 +799,30 @@ mDNSexport void internal_start_advertising_service(const ResourceRecord *const r
         for (i = 0; i < D2DTransportMax; i++)
         {
             if (i == excludedTransport) continue;
-            if (D2DStartAdvertisingPairOnTransport) D2DStartAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+            if (D2DStartAdvertisingPairOnTransport)
+            {
+                if (i == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_advertise_start(lower.c, resourceRecord->rrtype, clientPID);
+                }
+                D2DStartAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+            }
         }
     }
     else
     {
-        if (D2DStartAdvertisingPairOnTransport) D2DStartAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+        if (D2DStartAdvertisingPairOnTransport)
+        {
+            if (transportType == D2DAWDLTransport)
+            {
+                mdns_powerlog_awdl_advertise_start(lower.c, resourceRecord->rrtype, clientPID);
+            }
+            D2DStartAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+        }
     }
 }
 
-mDNSexport void external_stop_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags)
+mDNSexport void external_stop_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags, pid_t clientPID)
 {
 #if ENABLE_BLE_TRIGGERED_BONJOUR
     // BLE support currently not handled by a D2D plugin
@@ -794,10 +835,10 @@ mDNSexport void external_stop_advertising_service(const ResourceRecord *const re
     }
     else
 #endif  // ENABLE_BLE_TRIGGERED_BONJOUR
-        internal_stop_advertising_service(resourceRecord, flags);
+        internal_stop_advertising_service(resourceRecord, flags, clientPID);
 }
 
-mDNSexport void internal_stop_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags)
+mDNSexport void internal_stop_advertising_service(const ResourceRecord *const resourceRecord, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
     mDNSu8 *rhs = NULL;
@@ -823,16 +864,30 @@ mDNSexport void internal_stop_advertising_service(const ResourceRecord *const re
         for (i = 0; i < D2DTransportMax; i++)
         {
             if (i == excludedTransport) continue;
-            if (D2DStopAdvertisingPairOnTransport) D2DStopAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+            if (D2DStopAdvertisingPairOnTransport)
+            {
+                D2DStopAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+                if (i == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_advertise_stop(lower.c, resourceRecord->rrtype, clientPID);
+                }
+            }
         }
     }
     else
     {
-        if (D2DStopAdvertisingPairOnTransport) D2DStopAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+        if (D2DStopAdvertisingPairOnTransport)
+        {
+            D2DStopAdvertisingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+            if (transportType == D2DAWDLTransport)
+            {
+                mdns_powerlog_awdl_advertise_stop(lower.c, resourceRecord->rrtype, clientPID);
+            }
+        }
     }
 }
 
-mDNSexport void external_start_resolving_service(mDNSInterfaceID InterfaceID, const domainname *const fqdn, DNSServiceFlags flags)
+mDNSexport void external_start_resolving_service(mDNSInterfaceID InterfaceID, const domainname *const fqdn, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
     mDNSu8 *rhs = NULL;
@@ -854,8 +909,14 @@ mDNSexport void external_start_resolving_service(mDNSInterfaceID InterfaceID, co
         for (i = 0; i < D2DTransportMax; i++)
         {
             if (i == excludedTransport) continue;
-            if (D2DStartResolvingPairOnTransport) D2DStartResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
-
+            if (D2DStartResolvingPairOnTransport)
+            {
+                if (i == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_resolve_start(lower.c, kDNSType_PTR, clientPID);
+                }
+                D2DStartResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+            }
             if (i == D2DAWDLTransport)
                 AWDL_used = true;
         }
@@ -863,8 +924,14 @@ mDNSexport void external_start_resolving_service(mDNSInterfaceID InterfaceID, co
     else
     {
         // Resolving over one specific transport.
-        if (D2DStartResolvingPairOnTransport) D2DStartResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
-
+        if (D2DStartResolvingPairOnTransport)
+        {
+            if (transportType == D2DAWDLTransport)
+            {
+                mdns_powerlog_awdl_resolve_start(lower.c, kDNSType_PTR, clientPID);
+            }
+            D2DStartResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+        }
         if (transportType == D2DAWDLTransport)
             AWDL_used = true;
     }
@@ -875,12 +942,12 @@ mDNSexport void external_start_resolving_service(mDNSInterfaceID InterfaceID, co
     if (AWDL_used && AWDLInterfaceID)
     {
         LogInfo("external_start_resolving_service: browse for TXT and SRV over AWDL");
-        external_start_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_TXT, 0);
-        external_start_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_SRV, 0);
+        external_start_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_TXT, 0, clientPID);
+        external_start_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_SRV, 0, clientPID);
     }
 }
 
-mDNSexport void external_stop_resolving_service(mDNSInterfaceID InterfaceID, const domainname *const fqdn, DNSServiceFlags flags)
+mDNSexport void external_stop_resolving_service(mDNSInterfaceID InterfaceID, const domainname *const fqdn, DNSServiceFlags flags, pid_t clientPID)
 {
     domainname lower;
     mDNSu8 *rhs = NULL;
@@ -901,16 +968,28 @@ mDNSexport void external_stop_resolving_service(mDNSInterfaceID InterfaceID, con
         for (i = 0; i < D2DTransportMax; i++)
         {
             if (i == excludedTransport) continue;
-            if (D2DStopResolvingPairOnTransport) D2DStopResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
-
+            if (D2DStopResolvingPairOnTransport)
+            {
+                D2DStopResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, i);
+                if (i == D2DAWDLTransport)
+                {
+                    mdns_powerlog_awdl_resolve_stop(lower.c, kDNSType_PTR, clientPID);
+                }
+            }
             if (i == D2DAWDLTransport)
                 AWDL_used = true;
         }
     }
     else
     {
-        if (D2DStopResolvingPairOnTransport) D2DStopResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
-
+        if (D2DStopResolvingPairOnTransport)
+        {
+            D2DStopResolvingPairOnTransport(compression_lhs, rhs - compression_lhs, rhs, end - rhs, transportType);
+            if (transportType == D2DAWDLTransport)
+            {
+                mdns_powerlog_awdl_resolve_stop(lower.c, kDNSType_PTR, clientPID);
+            }
+        }
         if (transportType == D2DAWDLTransport)
             AWDL_used = true;
     }
@@ -921,9 +1000,34 @@ mDNSexport void external_stop_resolving_service(mDNSInterfaceID InterfaceID, con
     if (AWDL_used && AWDLInterfaceID)
     {
         LogInfo("external_stop_resolving_service: stop browse for TXT and SRV on AWDL");
-        external_stop_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_TXT, 0);
-        external_stop_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_SRV, 0);
+        external_stop_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_TXT, 0, clientPID);
+        external_stop_browsing_for_service(AWDLInterfaceID, fqdn, kDNSType_SRV, 0, clientPID);
     }
+}
+
+mDNSexport mDNSBool callExternalHelpers(mDNSInterfaceID InterfaceID, const domainname *const domain, DNSServiceFlags flags)
+{
+    // Only call D2D layer routines if request applies to a D2D interface and the domain is "local".
+    if (    (((InterfaceID == mDNSInterface_Any) && (flags & (kDNSServiceFlagsIncludeP2P | kDNSServiceFlagsIncludeAWDL | kDNSServiceFlagsAutoTrigger)))
+            || mDNSPlatformInterfaceIsD2D(InterfaceID) || (InterfaceID == mDNSInterface_BLE))
+        && IsLocalDomain(domain))
+    {
+        return mDNStrue;
+    }
+    else
+        return mDNSfalse;
+}
+
+// Used to derive the original D2D specific flags specified by the client in the registration
+// when we don't have access to the original flag (kDNSServiceFlags*) values.
+mDNSexport mDNSu32 deriveD2DFlagsFromAuthRecType(AuthRecType authRecType)
+{
+    mDNSu32 flags = 0;
+    if ((authRecType == AuthRecordAnyIncludeP2P) || (authRecType == AuthRecordAnyIncludeAWDLandP2P))
+        flags |= kDNSServiceFlagsIncludeP2P;
+    else if ((authRecType == AuthRecordAnyIncludeAWDL) || (authRecType == AuthRecordAnyIncludeAWDLandP2P))
+        flags |= kDNSServiceFlagsIncludeAWDL;
+    return flags;
 }
 
 void initializeD2DPlugins(mDNS *const m)
